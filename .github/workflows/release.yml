@@ -33,9 +33,24 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build:win
-        shell: cmd
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $log = npm run build:win 2>&1
+          $code = $LASTEXITCODE
+          $log | Set-Content -Path build-log.txt -Encoding utf8
+          Write-Output $log
+          if ($code -ne 0) { exit $code }
+      - name: Report failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          { echo "### ❌ Windows build failed"; echo '```'; tail -c 8000 build-log.txt | tr -d '\r'; echo '```'; } > /tmp/body.md
+          gh pr comment 1 --body-file /tmp/body.md || true
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: nova-exe
           path: |
@@ -68,10 +83,22 @@ jobs:
             "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1 || true
           fi
       - run: npm ci
-      - run: npm run build:android
+      - name: Build Android APK
+        run: |
+          set -o pipefail
+          npm run build:android 2>&1 | tee build-log.txt
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          { echo "### ❌ Android build failed"; echo '```'; tail -c 8000 build-log.txt | tr -d '\r'; echo '```'; } > /tmp/body.md
+          gh pr comment 1 --body-file /tmp/body.md || true
       - name: Rename APK
+        if: success()
         run: mv android/app/build/outputs/apk/release/app-release.apk NovaClip-v1.0.0-android.apk
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: nova-apk
           path: NovaClip-v1.0.0-android.apk
