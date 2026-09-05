@@ -1,0 +1,37 @@
+appId: com.novaclip.app
+productName: NovaClip
+copyright: Copyright © 2026 NovaClip
+directories:
+  output: dist
+  buildResources: build
+files:
+  - electron/**
+  - app/**
+  - package.json
+  - "!**/*.map"
+asar: true
+compression: normal
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - ia32
+  icon: build/icon.png
+  artifactName: NovaClip-Setup-${version}-${arch}.exe
+  requestedExecutionLevel: asInvoker
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: NovaClip
+  runAfterFinish: true
+  artifactName: NovaClip-Setup-${version}-${arch}.exe
+
+electronVersion: 22.3.27

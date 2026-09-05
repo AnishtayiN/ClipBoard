@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">NovaClip</string>
+    <string name="title_activity_main">NovaClip</string>
+    <string name="package_name">com.novaclip.app</string>
+    <string name="custom_url_scheme">com.novaclip.app</string>
+    <string name="accessibility_description">NovaClip uses this service to capture copied text automatically in the background on Android 10 and newer. Enable it to keep your clipboard history complete.</string>
+</resources>

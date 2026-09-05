@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0b0f1a" />
+  <title>NovaClip</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- نوار عنوان سفارشی (فقط در دسکتاپ/الکترون) -->
+  <div id="titlebar" class="titlebar hidden">
+    <div class="titlebar-brand">
+      <div class="brand-mark">⧉</div>
+      <span>NovaClip</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="tb-btn" id="tb-min" title="Minimize" aria-label="Minimize">─</button>
+      <button class="tb-btn" id="tb-max" title="Maximize" aria-label="Maximize">▢</button>
+      <button class="tb-btn tb-close" id="tb-close" title="Close" aria-label="Close">✕</button>
+    </div>
+  </div>
+
+  <div id="app" class="app">
+    <!-- هدر اصلی -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="logo">
+          <div class="logo-badge">⧉</div>
+          <div class="logo-text">
+            <span class="logo-name">NovaClip</span>
+            <span class="logo-tag" data-i18n="tagline">مدیر کلیپ‌بورد</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="search" class="search" type="text" autocomplete="off" spellcheck="false"
+               data-i18n-placeholder="search_placeholder" placeholder="جستجو در تاریخچه… (Ctrl+K)" />
+        <kbd class="search-kbd">Ctrl K</kbd>
+        <button id="search-clear" class="search-clear hidden">✕</button>
+      </div>
+
+      <div class="topbar-actions">
+        <button class="icon-btn" id="btn-capture" data-tooltip="capture_now" aria-label="capture">⟳</button>
+        <button class="icon-btn" id="btn-theme" data-tooltip="theme" aria-label="theme">◐</button>
+        <button class="icon-btn" id="btn-lang" data-tooltip="language" aria-label="language">EN</button>
+        <button class="icon-btn" id="btn-ai" data-tooltip="ai" aria-label="ai">✦</button>
+        <button class="icon-btn" id="btn-settings" data-tooltip="settings" aria-label="settings">⚙</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <!-- نوار کناری -->
+      <aside class="sidebar">
+        <nav class="nav" id="nav">
+          <button class="nav-item active" data-filter="all">
+            <span class="nav-ico">▤</span><span data-i18n="cat_all">همه</span><span class="nav-count" id="count-all">0</span>
+          </button>
+          <button class="nav-item" data-filter="favorites">
+            <span class="nav-ico">★</span><span data-i18n="cat_favorites">موردعلاقه‌ها</span><span class="nav-count" id="count-favorites">0</span>
+          </button>
+          <button class="nav-item" data-filter="pinned">
+            <span class="nav-ico">📌</span><span data-i18n="cat_pinned">سنجاق‌شده</span><span class="nav-count" id="count-pinned">0</span>
+          </button>
+          <div class="nav-sep"></div>
+          <button class="nav-item" data-filter="text">
+            <span class="nav-ico">▤</span><span data-i18n="cat_text">متن</span><span class="nav-count" id="count-text">0</span>
+          </button>
+          <button class="nav-item" data-filter="link">
+            <span class="nav-ico">🔗</span><span data-i18n="cat_link">لینک</span><span class="nav-count" id="count-link">0</span>
+          </button>
+          <button class="nav-item" data-filter="email">
+            <span class="nav-ico">✉</span><span data-i18n="cat_email">ایمیل</span><span class="nav-count" id="count-email">0</span>
+          </button>
+          <button class="nav-item" data-filter="color">
+            <span class="nav-ico">🎨</span><span data-i18n="cat_color">رنگ</span><span class="nav-count" id="count-color">0</span>
+          </button>
+          <button class="nav-item" data-filter="image">
+            <span class="nav-ico">🖼</span><span data-i18n="cat_image">تصویر</span><span class="nav-count" id="count-image">0</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <div class="storage-meter">
+            <div class="storage-label">
+              <span data-i18n="storage_used">فضای مصرفی</span>
+              <span id="storage-value">0 KB</span>
+            </div>
+            <div class="storage-bar"><div class="storage-fill" id="storage-fill"></div></div>
+          </div>
+          <button class="btn btn-ghost btn-block" id="btn-export"><span>⭳</span><span data-i18n="export">خروجی JSON</span></button>
+          <button class="btn btn-danger btn-block" id="btn-clear"><span>🗑</span><span data-i18n="clear_all">پاک‌کردن همه</span></button>
+        </div>
+      </aside>
+
+      <!-- فهرست اصلی -->
+      <main class="main">
+        <div class="list-header">
+          <div class="list-title">
+            <h2 id="list-title" data-i18n="history">تاریخچه</h2>
+            <span class="list-sub" id="list-sub"></span>
+          </div>
+          <div class="list-tools">
+            <div class="sort-select">
+              <select id="sort">
+                <option value="newest" data-i18n="sort_newest">جدیدترین</option>
+                <option value="oldest" data-i18n="sort_oldest">قدیمی‌ترین</option>
+                <option value="copied" data-i18n="sort_copied">پرکپی‌ترین</option>
+                <option value="alpha" data-i18n="sort_alpha">حروف الفبا</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="list" class="list" tabindex="0">
+          <div class="empty" id="empty">
+            <div class="empty-art">⧉</div>
+            <h3 data-i18n="empty_title">هنوز چیزی کپی نکرده‌اید</h3>
+            <p data-i18n="empty_desc">هر متنی را کپی کنید تا به‌صورت خودکار اینجا ذخیره شود. کلید میانبر Ctrl+Shift+V پنجره را باز می‌کند.</p>
+          </div>
+        </div>
+      </main>
+
+      <!-- پیش‌نمایش -->
+      <aside class="preview" id="preview">
+        <div class="preview-placeholder" id="preview-placeholder">
+          <div class="empty-art small">⧉</div>
+          <p data-i18n="preview_hint">یک مورد را برای مشاهده انتخاب کنید</p>
+        </div>
+        <div class="preview-body hidden" id="preview-body"></div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- پنل هوش مصنوعی -->
+  <div class="drawer" id="ai-panel" aria-hidden="true">
+    <div class="drawer-backdrop" id="ai-backdrop"></div>
+    <div class="drawer-content">
+      <div class="drawer-head">
+        <h3>✦ <span data-i18n="ai_title">دستیار هوشمند</span></h3>
+        <button class="icon-btn" id="ai-close">✕</button>
+      </div>
+      <div class="drawer-scroll">
+        <p class="ai-source" id="ai-source"></p>
+        <div class="ai-actions" id="ai-actions">
+          <button class="chip" data-ai="summarize">📝 <span data-i18n="ai_summarize">خلاصه</span></button>
+          <button class="chip" data-ai="translate">🌐 <span data-i18n="ai_translate">ترجمه</span></button>
+          <button class="chip" data-ai="explain">💡 <span data-i18n="ai_explain">توضیح</span></button>
+          <button class="chip" data-ai="rewrite">✍️ <span data-i18n="ai_rewrite">بازنویسی</span></button>
+        </div>
+        <div class="ai-config">
+          <label class="field">
+            <span data-i18n="ai_provider">سرویس‌دهنده</span>
+            <select id="ai-provider">
+              <option value="openai">OpenAI (ChatGPT)</option>
+              <option value="anthropic">Anthropic (Claude)</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="ollama">Ollama (محلی)</option>
+              <option value="custom">Custom (OpenAI-compatible)</option>
+            </select>
+          </label>
+          <label class="field" id="ai-base-field">
+            <span data-i18n="ai_base">آدرس پایه (Base URL)</span>
+            <input type="text" id="ai-base" placeholder="https://api.openai.com/v1" />
+          </label>
+          <label class="field" id="ai-model-field">
+            <span data-i18n="ai_model">مدل</span>
+            <input type="text" id="ai-model" placeholder="gpt-4o-mini" />
+          </label>
+          <label class="field" id="ai-key-field">
+            <span data-i18n="ai_key">کلید API</span>
+            <input type="password" id="ai-key" placeholder="sk-…" />
+          </label>
+          <label class="field">
+            <span data-i18n="ai_question">سؤال سفارشی</span>
+            <input type="text" id="ai-question" data-i18n-placeholder="ai_question_ph" placeholder="سؤالتان را بنویسید…" />
+          </label>
+          <button class="btn btn-primary btn-block" id="ai-run">✦ <span data-i18n="ai_run">اجرا</span></button>
+        </div>
+        <div class="ai-output hidden" id="ai-output-wrap">
+          <div class="ai-output-head">
+            <span data-i18n="ai_result">نتیجه</span>
+            <button class="icon-btn" id="ai-copy">⧉</button>
+          </div>
+          <div class="ai-output" id="ai-output"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- مودال تنظیمات -->
+  <div class="modal hidden" id="settings-modal" aria-hidden="true">
+    <div class="modal-backdrop" id="settings-backdrop"></div>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>⚙ <span data-i18n="settings">تنظیمات</span></h3>
+        <button class="icon-btn" id="settings-close">✕</button>
+      </div>
+      <div class="modal-tabs" id="settings-tabs">
+        <button class="mtab active" data-tab="general" data-i18n="tab_general">عمومی</button>
+        <button class="mtab" data-tab="appearance" data-i18n="tab_appearance">ظاهر</button>
+        <button class="mtab" data-tab="clipboard" data-i18n="tab_clipboard">کلیپ‌بورد</button>
+        <button class="mtab" data-tab="ai" data-i18n="tab_ai">هوش مصنوعی</button>
+        <button class="mtab" data-tab="security" data-i18n="tab_security">امنیت</button>
+        <button class="mtab" data-tab="about" data-i18n="tab_about">درباره</button>
+      </div>
+      <div class="modal-body">
+        <section class="stab active" data-pane="general">
+          <label class="switch-row"><span><b data-i18n="startup">اجرا هنگام شروع ویندوز</b><small data-i18n="startup_desc">برنامه با روشن‌شدن سیستم اجرا شود</small></span><input type="checkbox" id="set-startup" /><span class="switch"></span></label>
+          <label class="switch-row"><span><b data-i18n="close_to_tray">بستن به سینی</b><small data-i18n="close_to_tray_desc">دکمه بستن برنامه را به نوار وظیفه می‌فرستد</small></span><input type="checkbox" id="set-tray" checked /><span class="switch"></span></label>
+          <label class="switch-row"><span><b data-i18n="notify_copy">اعلان هنگام کپی</b><small data-i18n="notify_copy_desc">پس از ثبت هر کلیپ اعلان نمایش داده شود</small></span><input type="checkbox" id="set-notify" /><span class="switch"></span></label>
+          <label class="field"><span data-i18n="shortcut">کلید میانبر پنجره</span><input type="text" id="set-shortcut" value="Ctrl+Shift+V" /></label>
+        </section>
+
+        <section class="stab" data-pane="appearance">
+          <label class="switch-row"><span><b data-i18n="dark_auto">تم تاریک</b><small data-i18n="dark_desc">حالت تاریک را فعال نگه دارید</small></span><input type="checkbox" id="set-dark" checked /><span class="switch"></span></label>
+          <label class="field"><span data-i18n="language">زبان</span>
+            <select id="set-lang"><option value="fa">فارسی</option><option value="en">English</option></select>
+          </label>
+          <label class="field"><span data-i18n="preview_width">عرض پیش‌نمایش</span><input type="range" id="set-previeww" min="260" max="520" step="10" /></label>
+          <div class="swatches" id="accent-swatches"></div>
+        </section>
+
+        <section class="stab" data-pane="clipboard">
+          <label class="field"><span data-i18n="max_history">حداکثر تاریخچه</span><input type="number" id="set-max" min="50" max="10000" step="50" /></label>
+          <label class="field"><span data-i18n="max_chars">حداکثر طول هر کلیپ</span><input type="number" id="set-maxchars" min="1000" max="200000" step="1000" /></label>
+          <label class="switch-row"><span><b data-i18n="dedup">حذف تکراری‌ها</b><small data-i18n="dedup_desc">کلیپ تکراری به ابتدای فهرست منتقل می‌شود</small></span><input type="checkbox" id="set-dedup" checked /><span class="switch"></span></label>
+          <label class="switch-row"><span><b data-i18n="capture_images">ثبت تصاویر</b><small data-i18n="capture_images_desc">تصاویر کپی‌شده نیز ذخیره شوند</small></span><input type="checkbox" id="set-images" checked /><span class="switch"></span></label>
+        </section>
+
+        <section class="stab" data-pane="ai">
+          <label class="field"><span data-i18n="ai_provider">سرویس‌دهنده</span>
+            <select id="set-ai-provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="deepseek">DeepSeek</option><option value="ollama">Ollama</option><option value="custom">Custom</option></select>
+          </label>
+          <label class="field"><span data-i18n="ai_base">آدرس پایه</span><input type="text" id="set-ai-base" placeholder="https://api.openai.com/v1" /></label>
+          <label class="field"><span data-i18n="ai_model">مدل</span><input type="text" id="set-ai-model" placeholder="gpt-4o-mini" /></label>
+          <label class="field"><span data-i18n="ai_key">کلید API</span><input type="password" id="set-ai-key" placeholder="sk-…" /></label>
+        </section>
+
+        <section class="stab" data-pane="security">
+          <div class="security-note" data-i18n="security_note">متن کلیپ‌ها را با رمز عبور و الگوریتم AES-GCM رمزنگاری کنید. داده‌ها فقط با رمز شما قابل‌خواندن هستند.</div>
+          <label class="switch-row"><span><b data-i18n="encrypt">رمزنگاری تاریخچه</b><small data-i18n="encrypt_desc">رمز عبور برای قفل‌گشایی لازم می‌شود</small></span><input type="checkbox" id="set-encrypt" /><span class="switch"></span></label>
+          <label class="field" id="encrypt-pass-field" style="display:none"><span data-i18n="encrypt_pass">رمز عبور</span><input type="password" id="set-encrypt-pass" /></label>
+          <button class="btn btn-ghost btn-block" id="btn-encrypt-now"><span data-i18n="encrypt_now">اعمال رمزنگاری به داده‌های فعلی</span></button>
+        </section>
+
+        <section class="stab" data-pane="about">
+          <div class="about-brand"><div class="logo-badge big">⧉</div><h3>NovaClip</h3><span id="about-version">v1.0.0</span></div>
+          <p class="about-text" data-i18n="about_text">مدیر کلیپ‌بورد کراس‌پلتفرم با رابط کاربری مدرن. نسخه‌های ویندوز (۷ تا ۱۱) و اندروید (۷ به بعد).</p>
+          <div class="about-platform" id="about-platform"></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- مودال قفل -->
+  <div class="modal hidden" id="lock-modal" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box lock-box">
+      <div class="about-brand"><div class="logo-badge big">🔒</div><h3 data-i18n="lock_title">تاریخچه قفل است</h3></div>
+      <p data-i18n="lock_desc" class="about-text">رمز عبور خود را برای بازکردن تاریخچه وارد کنید.</p>
+      <label class="field"><span data-i18n="encrypt_pass">رمز عبور</span><input type="password" id="lock-pass" /></label>
+      <p class="lock-error hidden" id="lock-error" data-i18n="lock_error">رمز اشتباه است.</p>
+      <button class="btn btn-primary btn-block" id="lock-unlock" data-i18n="unlock">بازکردن</button>
+    </div>
+  </div>
+
+  <!-- مودال ویرایش -->
+  <div class="modal hidden" id="edit-modal" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box">
+      <div class="modal-head"><h3>✎ <span data-i18n="edit">ویرایش کلیپ</span></h3><button class="icon-btn" id="edit-close">✕</button></div>
+      <div class="modal-body">
+        <label class="field"><span data-i18n="content">محتوا</span><textarea id="edit-content" rows="8"></textarea></label>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="edit-cancel" data-i18n="cancel">انصراف</button>
+          <button class="btn btn-primary" id="edit-save" data-i18n="save">ذخیره</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- تایید -->
+  <div class="modal hidden" id="confirm-modal" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box confirm-box">
+      <h3 id="confirm-title"></h3>
+      <p id="confirm-msg"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="confirm-cancel" data-i18n="cancel">انصراف</button>
+        <button class="btn btn-danger" id="confirm-ok" data-i18n="confirm_yes">بله</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="i18n.js"></script>
+  <script src="bridge.js"></script>
+  <script src="store.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

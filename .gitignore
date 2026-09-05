@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+release/
+out/
+
+# Electron
+*.asar
+
+# Capacitor / Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/app/release/
+*.keystore
+*.jks
+
+# Capacitor generated
+.capacitor/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Capacitor generated web assets (re-created by `cap sync` at build time)
+android/app/src/main/assets/
