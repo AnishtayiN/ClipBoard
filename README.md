@@ -38,6 +38,7 @@
 |---|---|
 | `NovaClip-Setup-1.0.0-x64.exe` | ویندوز ۷ تا ۱۱ — ۶۴ بیتی |
 | `NovaClip-Setup-1.0.0-ia32.exe` | ویندوز ۷ تا ۱۱ — ۳۲ بیتی |
+| `NovaClip-Setup-1.0.0.exe` | نصب‌کننده ترکیبی (هر دو معماری) |
 | `NovaClip-v1.0.0-android.apk` | اندروید ۷.۰ به بعد |
 
 ---
@@ -173,6 +174,7 @@ See the [Releases](https://github.com/AnishtayiN/ClipBoard/releases) page.
 |---|---|
 | `NovaClip-Setup-1.0.0-x64.exe` | Windows 7 → 11 (64-bit) |
 | `NovaClip-Setup-1.0.0-ia32.exe` | Windows 7 → 11 (32-bit) |
+| `NovaClip-Setup-1.0.0.exe` | Combined installer (both architectures) |
 | `NovaClip-v1.0.0-android.apk` | Android 7.0+ |
 
 ## 🛠 Build from source
