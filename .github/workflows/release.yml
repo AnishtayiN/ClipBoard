@@ -1,0 +1,121 @@
+name: Build & Release (Windows EXE + Android APK)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: UI smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run smoke
+
+  build-windows:
+    name: Windows installer (7 → 11)
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:win
+        shell: cmd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-exe
+          path: |
+            dist/*.exe
+            dist/*.yml
+          if-no-files-found: error
+
+  build-android:
+    name: Android APK (7 → latest)
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Prepare Android SDK
+        run: |
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          SDKMGR=$(ls "$SDK"/cmdline-tools/latest/bin/sdkmanager 2>/dev/null || ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)
+          echo "Using sdkmanager: $SDKMGR"
+          if [ -n "$SDKMGR" ]; then
+            yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+            "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1 || true
+          fi
+      - run: npm ci
+      - run: npm run build:android
+      - name: Rename APK
+        run: mv android/app/build/outputs/apk/release/app-release.apk NovaClip-v1.0.0-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nova-apk
+          path: NovaClip-v1.0.0-android.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-android]
+    steps:
+      - uses: actions/download-artifact@v4
+      - name: Show artifacts
+        run: ls -R .
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
+          name: NovaClip v1.0.0 — Windows & Android
+          body: |
+            # NovaClip v1.0.0
+
+            A graphical, cross-platform clipboard manager.
+
+            ## Windows (7 → 11)
+            - `NovaClip-Setup-1.0.0-x64.exe` — installer (64-bit)
+            - `NovaClip-Setup-1.0.0-ia32.exe` — installer (32-bit)
+
+            ## Android (7.0 → latest)
+            - `NovaClip-v1.0.0-android.apk`
+
+            ## Features
+            - Real-time clipboard history with automatic type detection (text / link / email / color / code / image)
+            - Instant search, favorites & pinning, sorting, deduplication
+            - Dark & light themes, accent colors, RTL Persian + English UI
+            - AI assistant (OpenAI / Anthropic / DeepSeek / Ollama / custom endpoint)
+            - AES-GCM encrypted history (optional password)
+            - JSON export / import
+            - Global hotkey `Ctrl+Shift+V` (Windows) & system-tray support
+
+            See README for full documentation.
+          files: |
+            nova-exe/*.exe
+            nova-apk/*.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

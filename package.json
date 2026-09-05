@@ -1,0 +1,27 @@
+{
+  "name": "novaclip",
+  "version": "1.0.0",
+  "description": "NovaClip — یک مدیر کلیپ‌بورد گرافیکی کراس‌پلتفرم (Windows 7–11 + Android 7+) / A graphical cross-platform clipboard manager",
+  "author": "NovaClip",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "homepage": "https://github.com/AnishtayiN/ClipBoard",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "smoke": "node scripts/smoke.js",
+    "build:win": "electron-builder --win nsis",
+    "cap:add:android": "cap add android",
+    "cap:sync": "cap sync android",
+    "build:android": "cap sync android && cd android && ./gradlew assembleRelease",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "electron": "22.3.27",
+    "electron-builder": "^24.13.3",
+    "jsdom": "^24.1.0"
+  }
+}

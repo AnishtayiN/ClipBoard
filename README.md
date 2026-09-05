@@ -1,1 +1,194 @@
-# ClipBoard
+<div dir="rtl">
+
+# ⧉ NovaClip — مدیر کلیپ‌بورد کراس‌پلتفرم
+
+یک مدیر کلیپ‌بورد **گرافیکی، سریع و آفلاین** با یک رابط کاربری مشترک برای **ویندوز** و **اندروید**.
+
+- 💻 **ویندوز**: نصب‌کننده‌ی EXE برای **ویندوز ۷ تا ۱۱** (۳۲ بیتی و ۶۴ بیتی)
+- 📱 **اندروید**: APK برای **اندروید ۷.۰ به بعد** (API 24+) تا جدیدترین نسخه
+
+هر متنی را کپی کنید؛ NovaClip به‌صورت خودکار آن را ثبت می‌کند، دسته‌بندی می‌کند و در دسترس شما می‌گذارد.
+
+---
+
+## ✨ امکانات
+
+| قابلیت | توضیح |
+|---|---|
+| 🧲 ثبت خودکار | هر کلیپ (متن، لینک، ایمیل، رنگ، کد، تصویر) بلافاصله ذخیره می‌شود |
+| 🧠 تشخیص خودکار نوع | متن / لینک / ایمیل / رنگ HEX و RGB / کد / تصویر |
+| 🔍 جستجوی لحظه‌ای | با میانبر `Ctrl+K` در هر جای فهرست جستجو کنید |
+| ★ علاقه‌مندی و 📌 سنجاق | کلیپ‌های مهم را نشان کنید و همیشه بالا نگه دارید |
+| ↻ حذف تکراری‌ها | کلیپ تکراری به ابتدای فهرست منتقل می‌شود |
+| 🎨 تم تاریک/روشن + رنگ‌های تاکیدی | ۵ رنگ برجسته قابل انتخاب |
+| 🌐 دوزبانه | فارسی (راست‌به‌چپ) و انگلیسی |
+| ✦ دستیار هوشمند (AI) | خلاصه، ترجمه، توضیح و بازنویسی با OpenAI / Anthropic / DeepSeek / Ollama / سفارشی |
+| 🔒 رمزنگاری AES-GCM | رمزنگاری اختیاری تاریخچه با رمز عبور |
+| ⭳ خروجی / ورودی JSON | پشتیبان‌گیری و بازیابی کامل تاریخچه |
+| ⌨ کلید میانبر سراسری | `Ctrl+Shift+V` برای بازکردن پنجره (ویندوز) |
+| 🗔 سینی سیستم | اجرا در پس‌زمینه و بستن به سینی (ویندوز) |
+
+---
+
+## ⬇️ دانلود
+
+به صفحه‌ی [Releases](https://github.com/AnishtayiN/ClipBoard/releases) بروید:
+
+| فایل | پلتفرم |
+|---|---|
+| `NovaClip-Setup-1.0.0-x64.exe` | ویندوز ۷ تا ۱۱ — ۶۴ بیتی |
+| `NovaClip-Setup-1.0.0-ia32.exe` | ویندوز ۷ تا ۱۱ — ۳۲ بیتی |
+| `NovaClip-v1.0.0-android.apk` | اندروید ۷.۰ به بعد |
+
+---
+
+## 🛠 ساخت از سورس
+
+### پیش‌نیاز
+- Node.js 18+ و npm
+- برای ویندوز: فقط Node (ساخت روی CI هم انجام می‌شود)
+- برای اندروید: JDK 17 + Android SDK (platform 34)
+
+### نصب
+```bash
+npm install
+```
+
+### نسخه ویندوز (نصب‌کننده NSIS)
+```bash
+npm run build:win
+```
+خروجی در پوشه‌ی `dist/` تولید می‌شود:
+- `NovaClip-Setup-1.0.0-x64.exe`
+- `NovaClip-Setup-1.0.0-ia32.exe`
+
+### نسخه اندروید (APK)
+```bash
+npm run build:android
+```
+خروجی: `android/app/build/outputs/apk/release/app-release.apk`
+
+> پروژه‌ی اندروید از قبل در پوشه‌ی `android/` قرار دارد. اگر آن را حذف کردید:
+> ```bash
+> npx cap add android && npm run build:android
+> ```
+
+---
+
+## 🧭 ساختار پروژه
+
+```
+ClipBoard/
+├── app/                    # رابط کاربری مشترک (HTML/CSS/JS — برای هر دو پلتفرم)
+│   ├── index.html          # ساختار رابط
+│   ├── styles.css          # استایل‌ها، تم‌ها، واکنش‌گرایی
+│   ├── i18n.js             # ترجمه‌ها (فارسی/انگلیسی)
+│   ├── bridge.js           # لایه‌ی اتصال به پلتفرم (الکترون/اندروید/مرورگر)
+│   ├── store.js            # ذخیره‌سازی + رمزنگاری AES-GCM
+│   └── app.js              # منطق اصلی برنامه
+├── electron/               # پوسته‌ی ویندوز (Electron 22 — سازگار با ویندوز ۷)
+│   ├── main.js             # کلیپ‌بورد، میانبر، سینی، IPC
+│   └── preload.js          # پل امن بین UI و سیستم
+├── android/                # پروژه‌ی اندروید (Capacitor 6 — minSdk 24)
+│   └── app/src/main/java/com/novaclip/app/
+│       ├── ClipboardManagerPlugin.java        # افزونه‌ی کلیپ‌بورد
+│       ├── ClipboardMonitorService.java       # سرویس ثبت خودکار (اندروید ۷–۹)
+│       └── ClipboardAccessibilityService.java # ثبت پس‌زمینه (اندروید ۱۰+)
+├── build/                  # آیکون‌های برنامه (PNG/ICO)
+├── .github/workflows/      # CI: ساخت EXE + APK و انتشار Release
+└── scripts/                # تست دود (smoke test) رابط کاربری
+```
+
+---
+
+## ✦ راه‌اندازی دستیار هوشمند
+
+در **تنظیمات ← هوش مصنوعی** یکی از سرویس‌دهنده‌ها را انتخاب کنید:
+
+| سرویس | آدرس پایه (پیش‌فرض) | نیاز به کلید |
+|---|---|---|
+| OpenAI | `https://api.openai.com/v1` | ✅ |
+| Anthropic | `https://api.anthropic.com/v1` | ✅ |
+| DeepSeek | `https://api.deepseek.com/v1` | ✅ |
+| Ollama (محلی) | `http://localhost:11434/v1` | ❌ |
+| Custom | دلخواه | اختیاری |
+
+---
+
+## 🔒 رمزنگاری تاریخچه
+
+در **تنظیمات ← امنیت** گزینه‌ی «رمزنگاری تاریخچه» را فعال کنید و یک رمز عبور تعیین کنید.
+متن کلیپ‌ها با الگوریتم **AES-GCM 256** (مشتق‌سازی کلید PBKDF2 با ۱۵۰,۰۰۰ تکرار) رمزنگاری می‌شوند و بدون رمز عبور قابل خواندن نیستند.
+
+---
+
+## 📝 نکته‌ی اندروید
+
+- در **اندروید ۷ تا ۹** ثبت خودکار کلیپ‌ها به‌صورت کامل در پس‌زمینه انجام می‌شود.
+- در **اندروید ۱۰ به بعد** سیستم‌عامل دسترسی به کلیپ‌بورد در پس‌زمینه را محدود کرده است؛ برای ثبت خودکار کامل، سرویس دسترس‌پذیری NovaClip را در **تنظیمات ← دسترس‌پذیری** فعال کنید (بدون این سرویس، کلیپ‌ها هنگام باز بودن برنامه ثبت می‌شوند).
+
+---
+
+## 🧪 تست
+
+```bash
+npm run smoke
+```
+
+---
+
+## 📄 مجوز
+
+[MIT](LICENSE)
+
+</div>
+
+<hr/>
+
+# ⧉ NovaClip — Cross-platform Clipboard Manager
+
+A graphical, fast, offline clipboard manager with one shared UI for **Windows** and **Android**.
+
+- 💻 **Windows**: EXE installer for **Windows 7 → 11** (32-bit & 64-bit)
+- 📱 **Android**: APK for **Android 7.0+** (API 24+) up to the latest release
+
+Copy anything and NovaClip saves, categorizes and re-serves it instantly.
+
+## ✨ Features
+
+- Automatic clipboard capture (text, links, emails, colors, code, images)
+- Automatic type detection: text / link / email / HEX & RGB color / code / image
+- Instant search (`Ctrl+K`), favorites ★ and pinning 📌
+- Duplicate removal, sorting, JSON export/import
+- Dark/light themes + 5 accent colors, RTL Persian & English UI
+- AI assistant (summarize / translate / explain / rewrite) via OpenAI, Anthropic, DeepSeek, Ollama or any OpenAI-compatible endpoint
+- Optional AES-GCM encrypted history with a password
+- Global hotkey `Ctrl+Shift+V` and system tray (Windows)
+
+## ⬇️ Download
+
+See the [Releases](https://github.com/AnishtayiN/ClipBoard/releases) page.
+
+| File | Platform |
+|---|---|
+| `NovaClip-Setup-1.0.0-x64.exe` | Windows 7 → 11 (64-bit) |
+| `NovaClip-Setup-1.0.0-ia32.exe` | Windows 7 → 11 (32-bit) |
+| `NovaClip-v1.0.0-android.apk` | Android 7.0+ |
+
+## 🛠 Build from source
+
+```bash
+npm install
+npm run build:win      # Windows NSIS installer → dist/
+npm run build:android  # Android APK → android/app/build/outputs/apk/release/
+```
+
+## 🧭 Tech stack
+
+- **Windows**: Electron 22 (Chromium 108 — the last line compatible with Windows 7) + electron-builder/NSIS
+- **Android**: Capacitor 6 (minSdk 24) + a native Java clipboard plugin (foreground service + accessibility service)
+- **Shared UI**: vanilla HTML/CSS/JS — no framework, no CDN dependencies, fully offline
+
+## 📄 License
+
+[MIT](LICENSE)
