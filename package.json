@@ -10,7 +10,7 @@
     "start": "electron .",
     "dev": "electron .",
     "smoke": "node scripts/smoke.js",
-    "build:win": "electron-builder --win nsis --publish never",
+    "build:win": "electron-builder --win nsis --publish never --x64 --ia32",
     "cap:add:android": "cap add android",
     "cap:sync": "cap sync android",
     "build:android": "cap sync android && cd android && ./gradlew assembleRelease",
