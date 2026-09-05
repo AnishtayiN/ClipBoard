@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   test:
@@ -45,10 +46,29 @@ jobs:
         if: failure()
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          { echo "### ❌ Windows build failed"; echo '```'; tail -c 8000 build-log.txt | tr -d '\r'; echo '```'; } > /tmp/body.md
-          gh pr comment 1 --body-file /tmp/body.md || true
+          node -e '
+            const https = require("https");
+            const fs = require("fs");
+            const log = fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000);
+            const body = "### ❌ Windows build failed\n```\n" + log + "\n```";
+            const payload = JSON.stringify({ body });
+            const req = https.request({
+              hostname: "api.github.com",
+              path: "/repos/AnishtayiN/ClipBoard/issues/1/comments",
+              method: "POST",
+              headers: {
+                Authorization: "Bearer " + process.env.TOKEN,
+                "User-Agent": "novaclip-ci",
+                Accept: "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(payload)
+              }
+            }, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => console.log("comment:", res.statusCode, d.slice(0, 200))); });
+            req.on("error", e => console.error(e));
+            req.write(payload); req.end();
+          '
       - uses: actions/upload-artifact@v4
         if: success()
         with:
@@ -90,10 +110,29 @@ jobs:
       - name: Report failure
         if: failure()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          { echo "### ❌ Android build failed"; echo '```'; tail -c 8000 build-log.txt | tr -d '\r'; echo '```'; } > /tmp/body.md
-          gh pr comment 1 --body-file /tmp/body.md || true
+          node -e '
+            const https = require("https");
+            const fs = require("fs");
+            const log = fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000);
+            const body = "### ❌ Android build failed\n```\n" + log + "\n```";
+            const payload = JSON.stringify({ body });
+            const req = https.request({
+              hostname: "api.github.com",
+              path: "/repos/AnishtayiN/ClipBoard/issues/1/comments",
+              method: "POST",
+              headers: {
+                Authorization: "Bearer " + process.env.TOKEN,
+                "User-Agent": "novaclip-ci",
+                Accept: "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(payload)
+              }
+            }, res => { let d = ""; res.on("data", c => d += c); res.on("end", () => console.log("comment:", res.statusCode, d.slice(0, 200))); });
+            req.on("error", e => console.error(e));
+            req.write(payload); req.end();
+          '
       - name: Rename APK
         if: success()
         run: mv android/app/build/outputs/apk/release/app-release.apk NovaClip-v1.0.0-android.apk

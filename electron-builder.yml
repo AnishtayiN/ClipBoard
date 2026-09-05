@@ -18,7 +18,7 @@ win:
       arch:
         - x64
         - ia32
-  icon: build/icon.ico
+  icon: build/icon.png
   artifactName: NovaClip-Setup-${version}-${arch}.exe
   requestedExecutionLevel: asInvoker
   verifyUpdateCodeSignature: false
