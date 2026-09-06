@@ -513,7 +513,14 @@
   }
 
   async function exportAll() {
-    const json = await Store.exportAll();
+    let json;
+    try {
+      json = await Store.exportAll();
+    } catch (e) {
+      // A backup that silently dropped an image would be worse than none.
+      toast(t('export_error'), 'error');
+      return;
+    }
     const r = await Bridge.saveFile('novaclip-history.json', json);
     if (r !== null && r !== false) toast(t('exported'), 'success');
   }
@@ -927,7 +934,11 @@
 
       if (!res.ok) {
         box.checked = false;
-        toast(t('encryption_failed') + (res.error ? ' (' + res.error + ')' : ''), 'error');
+        if (res.error === 'IMAGE_READ_FAILED') {
+          toast(t('encryption_image_unreadable'), 'error');
+        } else {
+          toast(t('encryption_failed') + (res.error ? ' (' + res.error + ')' : ''), 'error');
+        }
         await refreshClips();
         return;
       }

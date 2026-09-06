@@ -17,9 +17,12 @@
    Both backends expose the same small synchronous API so `electron/main.js`
    can answer `ipcMain.on('store:*')` without awaiting anything.
 
-   The SQLite backend is *optional*: if the native module is missing (or fails
-   to load on a given platform) we transparently fall back to the JSON file
-   backend. Nothing in the app depends on SQLite being present.
+   The SQLite backend is *optional* and the JSON file backend is the release
+   default: Windows builds must not depend on a native module. The JSON
+   backend writes every acknowledged mutation to disk synchronously and
+   atomically (temp file + rename + fsync), so a crash right after a write
+   cannot lose it; SQLite is therefore a performance option, not a durability
+   requirement. Nothing in the app depends on SQLite being present.
    ============================================================ */
 'use strict';
 
@@ -29,7 +32,6 @@ const path = require('path');
 const STORE_FILE = 'store.json';
 const BLOB_DIR = 'blobs';
 const SCHEMA_VERSION = 2;
-const WRITE_DEBOUNCE_MS = 25;
 
 /* ---------- small helpers ---------- */
 
@@ -42,10 +44,26 @@ function safeName(id) {
   return n || '_';
 }
 
+// Durable atomic write: data goes to a temp file on the same volume, is
+// flushed to the OS, and only then renamed over the destination. A crash at
+// any point leaves either the old file or the new file — never a torn one.
 function atomicWriteFileSync(file, data) {
   const tmp = file + '.' + process.pid + '.' + Date.now() + '.tmp';
-  fs.writeFileSync(tmp, data);
+  const fd = fs.openSync(tmp, 'w', 0o600);      // clipboard data: owner-only
+  try {
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(tmp, file); // atomic on POSIX + Windows (same volume)
+  // Best-effort: fsync the directory so the rename itself is durable (a power
+  // loss immediately after the write cannot resurrect the old file). Opening a
+  // directory read-only fails on Windows, so this is best-effort by design.
+  try {
+    const dfd = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(dfd); } finally { fs.closeSync(dfd); }
+  } catch (e) { /* ignore */ }
 }
 
 function parseDataUrl(dataUrl) {
@@ -155,36 +173,34 @@ function openJsonBackend(dir) {
     doc = { version: SCHEMA_VERSION, kv: {} };
   }
 
+  // Remove temp files a previous run left behind when it crashed between the
+  // atomic write and the rename. The document they belonged to was never
+  // installed (the rename is atomic), so they are pure garbage.
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (/\.tmp$/.test(name)) {
+        try { fs.unlinkSync(path.join(dir, name)); } catch (e) { /* ignore */ }
+      }
+    }
+  } catch (e) { /* ignore */ }
+
   try { fs.mkdirSync(blobDir, { recursive: true }); } catch (e) { /* ignore */ }
 
-  let timer = null;
-  let dirty = false;
-
-  function flushSync() {
-    if (timer) { clearTimeout(timer); timer = null; }
-    if (!dirty) return;
-    dirty = false;
-    try {
-      atomicWriteFileSync(file, JSON.stringify(doc));
-    } catch (e) {
-      dirty = true; // retry on the next tick / next flush
-      throw e;
-    }
-  }
-
-  function scheduleFlush() {
-    dirty = true;
-    if (timer) return;
-    timer = setTimeout(() => { timer = null; try { flushSync(); } catch (e) { /* reported by caller */ } }, WRITE_DEBOUNCE_MS);
-    if (timer && typeof timer.unref === 'function') timer.unref();
+  // Every kv mutation is written to disk synchronously and atomically (temp
+  // file + rename + fsync). There is deliberately no debounce window: a crash
+  // a moment after an acknowledged write must not lose that write. The clips
+  // document stays small (image bytes live in blobs/) and the SQLite backend
+  // already behaves this way, so write-through costs are acceptable.
+  function writeDoc() {
+    atomicWriteFileSync(file, JSON.stringify(doc));
   }
 
   return {
     name: 'file',
     getAll() { return Object.assign({}, doc.kv); },
     get(key) { return Object.prototype.hasOwnProperty.call(doc.kv, key) ? doc.kv[key] : null; },
-    set(key, value) { doc.kv[key] = String(value); scheduleFlush(); },
-    del(key) { delete doc.kv[key]; scheduleFlush(); },
+    set(key, value) { doc.kv[key] = String(value); writeDoc(); },
+    del(key) { delete doc.kv[key]; writeDoc(); },
     putBlob(id, mime, buf) {
       const base = path.join(blobDir, safeName(id));
       atomicWriteFileSync(base, buf);
@@ -207,8 +223,8 @@ function openJsonBackend(dir) {
       for (const k of Object.keys(doc.kv)) kvBytes += (k.length + doc.kv[k].length) * 2;
       return { kvBytes, blobBytes: dirSize(blobDir) };
     },
-    flush: flushSync,
-    close: flushSync,
+    flush() { /* writes are synchronous — nothing is ever pending */ },
+    close() { /* same */ },
   };
 }
 
