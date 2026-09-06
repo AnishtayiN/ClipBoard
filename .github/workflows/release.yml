@@ -47,7 +47,7 @@ permissions:
 
 jobs:
   test:
-    name: UI smoke test
+    name: Tests (store / main / renderer + UI smoke)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,8 +55,11 @@ jobs:
         with:
           node-version: 20
           cache: npm
-      - run: npm ci
-      - run: npm run smoke
+      # --ignore-scripts: the test job never launches Electron, so downloading
+      # the ~100 MB binary (and running electron-builder's postinstall) is
+      # pointless and only adds a way for CI to fail.
+      - run: npm ci --ignore-scripts
+      - run: npm test
 
   configure:
     name: Resolve version & release metadata

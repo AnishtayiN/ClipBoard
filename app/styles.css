@@ -424,6 +424,14 @@ html[data-platform="desktop"] .app { padding-top: 0; }
   display: block;
   margin-top: 2px;
 }
+.ai-warning-note {
+  color: var(--text-faint);
+  font-size: 11px;
+  display: block;
+  margin-top: 6px;
+  line-height: 1.7;
+  opacity: .85;
+}
 #ai-warning {
   background: rgba(255, 177, 78, 0.1);
   border: 1px solid rgba(255, 177, 78, 0.3);
@@ -431,6 +439,12 @@ html[data-platform="desktop"] .app { padding-top: 0; }
   padding: 10px;
   margin-bottom: 8px;
 }
+#ai-warning.hidden { display: none; }
+
+/* ---------- Storage / security extras ---------- */
+.storage-backend { font-style: normal; opacity: .7; font-size: 10px; margin-inline-start: 4px; }
+.storage-fill.unlimited { background: var(--border); opacity: .55; }
+.security-hint { font-size: 11.5px; color: var(--text-faint); line-height: 1.8; margin: 10px 0 4px; }
 
 #update-modal { z-index: 400; }
 #support-modal { z-index: 350; }

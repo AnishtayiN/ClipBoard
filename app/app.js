@@ -8,15 +8,17 @@
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   const State = {
-    clips: [],          // in-memory (decrypted) view
+    clips: [],          // in-memory (decrypted) view — wiped on lock
     filter: 'all',
     search: '',
     sort: 'newest',
     selectedId: null,
     unlocked: false,
-    lockPass: null,     // held in memory after unlock
-    lastClipSig: null,
+    lockPass: null,     // held in memory while unlocked only
+    lastClipSig: null,  // authoritative fingerprint, produced by the platform
     editTargetId: null,
+    aiSource: '',       // raw clipboard text for the AI panel (never parsed from HTML)
+    busy: false,
   };
 
   const ACCENTS = [
@@ -170,11 +172,21 @@
   }
 
   function updateStorage() {
-    const bytes = Store.storageBytes();
+    const info = Store.storageInfo();
+    $('#storage-value').textContent = fmtBytes(info.bytes);
+    const backendEl = $('#storage-backend');
+    if (backendEl) backendEl.textContent = info.backend === 'sqlite' ? 'SQLite' : info.backend === 'native' ? 'File' : 'Local';
+    const fill = $('#storage-fill');
+    if (info.capacity) {
+      const pct = Math.min(100, Math.round(info.bytes / info.capacity * 100));
+      fill.style.width = pct + '%';
+      fill.classList.remove('unlimited');
+    } else {
+      // Disk-backed store: no fixed quota to fill.
+      fill.style.width = '100%';
+      fill.classList.add('unlimited');
+    }
     const s = Store.getSettings();
-    $('#storage-value').textContent = fmtBytes(bytes);
-    const pct = Math.min(100, Math.round(bytes / (4.5 * 1024 * 1024) * 100));
-    $('#storage-fill').style.width = pct + '%';
     $('#list-sub').textContent = `${State.clips.length} / ${s.maxHistory}`;
   }
 
@@ -187,7 +199,12 @@
     let thumb = `<span class="type-tag">${t('type_' + clip.type)}</span>`;
     let content;
     if (clip.type === 'image') {
-      thumb = `<div class="thumb"><img src="${clip.data}" alt="" /></div>`;
+      // Neither the full image nor its thumbnail lives in the clips document;
+      // both are blobs fetched on demand (thumb for the list, full for preview).
+      const src = clip.thumb || clip.data;
+      thumb = src
+        ? `<div class="thumb"><img src="${escapeHtml(src)}" alt="" /></div>`
+        : `<div class="thumb"><img class="thumb-lazy" data-thumb-for="${escapeHtml(clip.id)}" alt="" /></div>`;
       content = `<div class="text">🖼 ${escapeHtml(t('type_image'))}</div>`;
     } else if (clip.type === 'color') {
       thumb = `<div class="thumb" style="background:${escapeHtml(clip.meta.hex)}"></div>`;
@@ -227,6 +244,9 @@
       if (State.search || State.filter !== 'all') {
         $('#empty h3').textContent = t('no_results');
         $('#empty p').textContent = '';
+      } else if (State.locked()) {
+        $('#empty h3').textContent = t('lock_title');
+        $('#empty p').textContent = t('lock_desc');
       } else {
         $('#empty h3').textContent = t('empty_title');
         $('#empty p').textContent = t('empty_desc');
@@ -236,11 +256,25 @@
       const frag = document.createDocumentFragment();
       visible.forEach(c => frag.appendChild(buildItemEl(c)));
       listEl.appendChild(frag);
+      hydrateThumbs(visible);
     }
     updateCounts();
   }
 
-  function renderPreview(clip) {
+  // Fill in image thumbnails asynchronously; the list renders instantly with
+  // placeholders instead of waiting on blob reads.
+  function hydrateThumbs(clips) {
+    const pending = (clips || []).filter(c => c.type === 'image' && !c.thumb && !c.data);
+    for (const clip of pending) {
+      Store.getImageThumb(clip).then((url) => {
+        if (!url) return;
+        const img = document.querySelector('#list .item[data-id="' + clip.id + '"] .thumb img');
+        if (img) img.src = url;
+      }).catch(() => {});
+    }
+  }
+
+  async function renderPreview(clip) {
     const placeholder = $('#preview-placeholder');
     const body = $('#preview-body');
     if (!clip) {
@@ -254,7 +288,13 @@
     const display = clipDisplayText(clip);
     let contentHtml = '';
     if (clip.type === 'image') {
-      contentHtml = `<div class="preview-image"><img src="${clip.data}" alt="clip" /></div>`;
+      // Full-resolution bytes are fetched on demand from the blob store.
+      const data = await Store.getImageData(clip);
+      if (State.selectedId !== clip.id) return;   // selection changed meanwhile
+      if (data) clip.data = data;
+      contentHtml = data
+        ? `<div class="preview-image"><img src="${escapeHtml(data)}" alt="clip" /></div>`
+        : `<div class="preview-text">${escapeHtml(t('image_unavailable'))}</div>`;
     } else if (clip.type === 'color') {
       contentHtml = `<div class="color-chip" style="background:${escapeHtml(clip.meta.hex)}"><span>${escapeHtml(display)}</span></div>`;
     } else {
@@ -287,74 +327,94 @@
     State.selectedId = id;
     const clip = State.clips.find(c => c.id === id) || null;
     $$('#list .item').forEach(n => n.classList.toggle('selected', n.dataset.id === id));
-    renderPreview(clip);
+    const p = renderPreview(clip);
     if (!keepScroll && clip) {
       const el = $('#list .item[data-id="' + id + '"]');
       if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
     }
+    return p;
   }
 
   /* ============================================================
      Clipboard capture
+
+     The signature always comes from the platform layer (SHA-256 of the actual
+     content on Electron, SHA-256 of the read payload elsewhere). The renderer
+     never derives its own — a length-based key used to treat "hello123" and
+     "world456" as the same clipboard entry.
      ============================================================ */
-  async function captureClipboard() {
-    if (State.locked()) return;
-    const res = await Bridge.readClipboard();
-    if (!res) return;
+  async function captureClipboard(preRead) {
+    if (State.locked()) return null;
+
+    const res = preRead || await Bridge.readClipboard();
+    if (!res) return null;
+
+    const sig = res.signature;
+    if (!sig || sig === 'empty') return null;
+    if (sig === State.lastClipSig) return null;      // echo / unchanged
+
+    const s = Store.getSettings();
     let clip = null;
+
     if (res.image) {
-      const s = Store.getSettings();
-      if (!s.captureImages) return;
-      clip = { id: uid(), type: 'image', data: res.image, ts: Date.now(), copies: 0 };
+      if (!s.captureImages) { State.lastClipSig = sig; return null; }
+      clip = {
+        id: uid(), type: 'image', data: res.image,
+        thumb: await Store.makeThumb(res.image), ts: Date.now(), copies: 0,
+      };
     } else if (res.text != null && String(res.text).length > 0) {
       const text = String(res.text);
-      const s = Store.getSettings();
       const det = detectType(text);
       const trimmed = text.length > s.maxChars ? text.slice(0, s.maxChars) : text;
       clip = { id: uid(), type: det.type, meta: det.meta, text: trimmed, ts: Date.now(), copies: 0 };
     }
-    if (!clip) return;
 
-    const sig = clip.type === 'image' ? 'img:' + clip.data.length : clip.type + ':' + clip.text;
-    if (sig === State.lastClipSig) return; // avoid echo loops
+    if (!clip) return null;
     State.lastClipSig = sig;
 
-    const s = Store.getSettings();
-    if (s.encrypt && clip.text != null) {
-      // dedup against in-memory decrypted clips
+    const encrypting = Store.isEncrypted();
+
+    if (encrypting) {
+      if (!State.lockPass) { showLock(); return null; }
+      // Dedup against the decrypted in-memory view.
       if (s.dedup) {
-        const dup = State.clips.find(c => c.text === clip.text && c.type === clip.type);
+        const dup = State.clips.find(c =>
+          clip.type === 'image' ? (c.type === 'image' && c.data && c.data === clip.data)
+                                : (c.type === clip.type && c.text === clip.text));
         if (dup) {
-          dup.ts = Date.now(); dup.copies = (dup.copies || 0) + 1;
-          Store.updateClip(dup.id, { ts: dup.ts, copies: dup.copies });
+          dup.ts = Date.now();
+          dup.copies = (dup.copies || 0) + 1;
+          await Store.updateClip(dup.id, { ts: dup.ts, copies: dup.copies }, State.lockPass);
           State.clips = State.clips.filter(c => c.id !== dup.id);
           State.clips.unshift(dup);
           afterCapture(dup);
-          return;
+          return dup;
         }
       }
       const c = await Store.addEncryptedClip(clip, State.lockPass);
-      c.text = clip.text;
+      // Decrypted view for the UI; storage only ever holds ciphertext.
+      c.text = clip.text != null ? clip.text : null;
+      c.data = clip.data || null;
+      c.thumb = clip.thumb || null;
       State.clips.unshift(c);
       if (State.clips.length > s.maxHistory) State.clips.length = s.maxHistory;
       afterCapture(c);
-    } else {
-      const c = Store.addClip(clip);
-      if (!State.clips.some(x => x.id === c.id)) State.clips.unshift(c);
-      else {
-        // dedup moved existing to front
-        State.clips = State.clips.filter(x => x.id !== c.id);
-        State.clips.unshift(c);
-      }
-      afterCapture(c);
+      return c;
     }
+
+    const c = await Store.addClip(clip);
+    const existing = State.clips.findIndex(x => x.id === c.id);
+    if (existing >= 0) State.clips.splice(existing, 1);
+    State.clips.unshift(c);
+    if (State.clips.length > s.maxHistory) State.clips.length = s.maxHistory;
+    afterCapture(c);
+    return c;
   }
 
   function afterCapture(clip) {
     render();
-    if (Store.getSettings().notify) {
-      Bridge.notify('NovaClip', t('captured'));
-    }
+    if (Store.getSettings().notify) Bridge.notify('NovaClip', t('captured'));
+    return clip;
   }
 
   /* ============================================================
@@ -362,32 +422,36 @@
      ============================================================ */
   async function copyClip(clip) {
     if (!clip) return;
+    let sig = null;
     if (clip.type === 'image') {
-      Bridge.writeImage(clip.data);
+      const data = clip.data || await Store.getImageData(clip);
+      if (data) { clip.data = data; sig = await Bridge.writeImage(data); }
     } else {
-      await Bridge.writeClipboard(clip.text || '');
+      sig = await Bridge.writeClipboard(clip.text || '');
     }
-    State.lastClipSig = clip.type === 'image' ? 'img:' + clip.data.length : clip.type + ':' + clip.text;
+    // The platform tells us exactly which fingerprint it installed, so the
+    // capture loop cannot mistake our own write for a new clipboard entry.
+    if (sig) State.lastClipSig = sig;
     clip.copies = (clip.copies || 0) + 1;
     clip.ts = Date.now();
-    Store.updateClip(clip.id, { copies: clip.copies, ts: clip.ts });
+    await Store.updateClip(clip.id, { copies: clip.copies, ts: clip.ts }, State.lockPass);
     toast(t('copied'), 'success');
     render();
     selectClip(clip.id, true);
   }
 
-  function deleteClip(clip) {
-    Store.deleteClip(clip.id);
+  async function deleteClip(clip) {
+    await Store.deleteClip(clip.id);
     State.clips = State.clips.filter(c => c.id !== clip.id);
     if (State.selectedId === clip.id) { State.selectedId = null; renderPreview(null); }
     render();
     toast(t('deleted'));
   }
 
-  function toggleFlag(clip, key) {
+  async function toggleFlag(clip, key) {
     const val = !clip[key];
     clip[key] = val;
-    Store.updateClip(clip.id, { [key]: val });
+    await Store.updateClip(clip.id, { [key]: val }, State.lockPass);
     render();
     selectClip(clip.id, true);
     if (key === 'fav' && val) toast(t('favorite_added'), 'success');
@@ -395,13 +459,18 @@
   }
 
   function openEdit(clip) {
-    // SECURITY: If clip is encrypted, we need password to edit
-    if (clip.encrypted && typeof clip.encrypted === 'object') {
-      if (!State.lockPass) {
-        toast(t('encryption_warn'), 'error');
-        showLock();
-        return;
-      }
+    // The editor is a textarea; letting it run on an image clip would replace
+    // the image with its (empty) text and silently change the clip type.
+    if (clip.type === 'image') { toast(t('edit_image_unsupported'), 'error'); return; }
+    if (Store.isEncrypted() && !State.lockPass) {
+      toast(t('encryption_warn'), 'error');
+      showLock();
+      return;
+    }
+    if (clip.text == null && clip.type !== 'image') {
+      toast(t('encryption_warn'), 'error');
+      showLock();
+      return;
     }
     State.editTargetId = clip.id;
     $('#edit-content').value = clip.text || '';
@@ -409,53 +478,36 @@
     $('#edit-content').focus();
   }
 
-  // SECURITY FIX #1: saveEdit now properly preserves encryption
   async function saveEdit() {
     const clip = State.clips.find(c => c.id === State.editTargetId);
     if (!clip) return;
     const val = $('#edit-content').value;
     const det = detectType(val);
-    
-    // Check if this clip is/was encrypted
-    const wasEncrypted = !!(clip.encrypted && typeof clip.encrypted === 'object');
-    const shouldEncrypt = Store.isEncrypted();
-    
-    if (shouldEncrypt || wasEncrypted) {
-      // Re-encrypt if encryption is enabled or clip was encrypted
-      if (State.lockPass) {
-        // Use async update that handles encryption
-        const updated = await Store.updateClipAsync(
-          clip.id, 
-          { text: val, type: det.type, meta: det.meta, ts: Date.now() },
-          State.lockPass
-        );
-        if (updated) {
-          // Update local state with decrypted view
-          clip.text = val;
-          clip.type = det.type;
-          clip.meta = det.meta;
-          clip.ts = Date.now();
-          // Update the clip in State.clips
-          const idx = State.clips.findIndex(c => c.id === clip.id);
-          if (idx >= 0) {
-            State.clips[idx] = Object.assign({}, clip);
-          }
-        }
-      } else {
-        toast(t('encryption_warn'), 'error');
-        return;
-      }
-    } else {
-      // Plaintext update
-      clip.text = val;
-      clip.type = det.type;
-      clip.meta = det.meta;
-      clip.ts = Date.now();
-      Store.updateClip(clip.id, { text: val, type: det.type, meta: det.meta, ts: clip.ts });
+    const ts = Date.now();
+
+    // Store.updateClip re-encrypts internally whenever the history is
+    // encrypted, so plaintext never reaches storage on either path.
+    const updated = await Store.updateClip(
+      clip.id,
+      { text: val, type: det.type, meta: det.meta, ts },
+      State.lockPass
+    );
+    if (!updated) {
+      toast(t('encryption_warn'), 'error');
+      return;
     }
-    
+
+    // Keep the decrypted view in sync (memory only).
+    clip.text = val;
+    clip.type = det.type;
+    clip.meta = det.meta;
+    clip.ts = ts;
+    const idx = State.clips.findIndex(c => c.id === clip.id);
+    if (idx >= 0) State.clips[idx] = clip;
+
+    $('#edit-content').value = '';
     $('#edit-modal').classList.add('hidden');
-    render(); 
+    render();
     selectClip(clip.id);
     toast(t('saved'), 'success');
   }
@@ -463,7 +515,7 @@
   async function exportAll() {
     const json = await Store.exportAll();
     const r = await Bridge.saveFile('novaclip-history.json', json);
-    if (r !== null) toast(t('exported'), 'success');
+    if (r !== null && r !== false) toast(t('exported'), 'success');
   }
 
   function getSelectedClip() {
@@ -472,6 +524,10 @@
 
   /* ============================================================
      AI
+
+     The source text lives in State.aiSource. The DOM node #ai-source is
+     display-only — we never read the source back out of the HTML, so warning
+     markup can never leak into (or corrupt) what is sent to the model.
      ============================================================ */
   const AI_PRESETS = {
     openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', key: '' },
@@ -526,37 +582,56 @@
     $('#ai-key-field').style.display = (provider === 'ollama') ? 'none' : '';
   }
 
+  // Built with textContent only: no user data ever goes through innerHTML.
+  function renderAiWarning(info) {
+    const box = $('#ai-warning');
+    box.textContent = '';
+    if (!info || !info.sensitive) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+
+    const title = document.createElement('div');
+    title.className = 'ai-warning';
+    title.textContent = t('ai_sensitive_warning');
+
+    const types = document.createElement('div');
+    types.className = 'ai-warning-detail';
+    types.textContent = t('ai_sensitive_types') + ': ' + info.types.join(', ');
+
+    const note = document.createElement('div');
+    note.className = 'ai-warning-note';
+    note.textContent = t('ai_sensitive_disclaimer');
+
+    box.appendChild(title);
+    box.appendChild(types);
+    box.appendChild(note);
+  }
+
   function openAi(clip) {
     const src = clip ? (clip.text || '') : '';
-    
-    // SECURITY FIX #7: Detect sensitive content before showing AI panel
-    const sensitive = Store.detectSensitiveContent(src);
-    if (sensitive.sensitive) {
-      const sensitiveTypes = sensitive.types.join(', ');
-      $('#ai-source').innerHTML = `<span class="ai-warning">⚠️ ${escapeHtml(t('ai_sensitive_warning'))}</span><br><small class="ai-warning-detail">${escapeHtml(t('ai_sensitive_types') + ': ' + sensitiveTypes)}</small><hr>${escapeHtml(src.slice(0, 500))}${src.length > 500 ? '...' : ''}`;
-      $('#ai-warning').classList.remove('hidden');
-    } else {
-      $('#ai-source').textContent = src || t('preview_hint');
-      $('#ai-warning').classList.add('hidden');
-    }
-    
+    State.aiSource = src;
+
+    $('#ai-source').textContent = src || t('preview_hint');
+    renderAiWarning(Store.detectSensitiveContent(src));
     $('#ai-output').textContent = '';
     $('#ai-output-wrap').classList.add('hidden');
     syncAiForm();
     $('#ai-panel').setAttribute('aria-hidden', 'false');
   }
 
-  // SECURITY FIX #7: Show confirmation before sending sensitive data to AI
+  function closeAi() {
+    $('#ai-panel').setAttribute('aria-hidden', 'true');
+    // Do not keep the source (or the model output) around once the panel closes.
+    State.aiSource = '';
+    $('#ai-source').textContent = '';
+    $('#ai-output').textContent = '';
+    renderAiWarning(null);
+  }
+
+  // Confirmation gate. Operates on State.aiSource — never on rendered HTML.
   async function confirmAiSend(src) {
-    const sensitive = Store.detectSensitiveContent(src);
-    if (sensitive.sensitive) {
-      const confirmed = await confirmDialog(
-        t('ai_sensitive_title'), 
-        t('ai_sensitive_confirm')
-      );
-      if (!confirmed) return false;
-    }
-    return true;
+    const info = Store.detectSensitiveContent(src);
+    if (!info.sensitive) return true;
+    return confirmDialog(t('ai_sensitive_title'), t('ai_sensitive_confirm'));
   }
 
   async function runAi(action) {
@@ -569,14 +644,10 @@
 
     const fields = aiFields();
     if (!fields.key && fields.provider !== 'ollama') { toast(t('ai_need_key'), 'error'); return; }
-    const src = $('#ai-source').textContent;
-    if (!src || src === t('preview_hint')) { toast(t('preview_hint'), 'error'); return; }
-    
-    // SECURITY FIX #7: Confirm before sending sensitive data
-    // Strip warning HTML if present to get actual source
-    const cleanSrc = src.replace(/⚠️.*<\/span>.*<hr>/s, '').replace(/<[^>]*>/g, '');
-    const canSend = await confirmAiSend(cleanSrc);
-    if (!canSend) return;
+
+    const src = State.aiSource;
+    if (!src) { toast(t('preview_hint'), 'error'); return; }
+    if (!(await confirmAiSend(src))) return;
 
     let instruction = (AI_PROMPTS[action] || AI_PROMPTS.summarize)[fields.provider] || AI_PROMPTS.summarize.custom;
     const customQ = $('#ai-question').value.trim();
@@ -588,11 +659,9 @@
     out.classList.add('streaming');
     out.textContent = '…';
 
-    const endpoint = fields.base.replace(/\/+$/, '') + '/chat/completions';
-    let body;
-    let headers = { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json' };
+
     if (fields.provider === 'anthropic') {
-      // Anthropic uses its own endpoint
       headers['x-api-key'] = fields.key;
       headers['anthropic-version'] = '2023-06-01';
       try {
@@ -600,7 +669,7 @@
           method: 'POST', headers,
           body: JSON.stringify({
             model: fields.model, max_tokens: 2000,
-            messages: [{ role: 'user', content: instruction + '\n\n' + cleanSrc }],
+            messages: [{ role: 'user', content: instruction + '\n\n' + src }],
           }),
         });
         const data = await resp.json();
@@ -608,21 +677,26 @@
         out.classList.remove('streaming');
         out.textContent = (data.content && data.content[0] && data.content[0].text) || '';
         return;
-      } catch (e) { out.classList.remove('streaming'); out.textContent = t('ai_error'); toast(t('ai_error'), 'error'); return; }
-    } else {
-      headers['Authorization'] = 'Bearer ' + fields.key;
-      body = JSON.stringify({
-        model: fields.model,
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant. Reply in the same language as the input unless instructed otherwise.' },
-          { role: 'user', content: instruction + '\n\n' + cleanSrc },
-        ],
-        stream: false,
-      });
+      } catch (e) {
+        out.classList.remove('streaming');
+        out.textContent = t('ai_error');
+        toast(t('ai_error'), 'error');
+        return;
+      }
     }
 
+    headers['Authorization'] = 'Bearer ' + fields.key;
+    const body = JSON.stringify({
+      model: fields.model,
+      messages: [
+        { role: 'system', content: 'You are a helpful assistant. Reply in the same language as the input unless instructed otherwise.' },
+        { role: 'user', content: instruction + '\n\n' + src },
+      ],
+      stream: false,
+    });
+
     try {
-      const resp = await fetch(endpoint, { method: 'POST', headers, body });
+      const resp = await fetch(fields.base.replace(/\/+$/, '') + '/chat/completions', { method: 'POST', headers, body });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data.error && data.error.message ? data.error.message : 'HTTP ' + resp.status);
       out.classList.remove('streaming');
@@ -646,6 +720,49 @@
     setTimeout(() => $('#lock-pass').focus(), 60);
   }
 
+  // Drops every decrypted byte the renderer is holding. Called when the user
+  // locks manually, when the window is hidden, and when encryption is turned
+  // back off — storage was already ciphertext, this closes the memory gap.
+  function lockNow(opts) {
+    const silent = opts && opts.silent;
+    State.lockPass = null;
+    State.unlocked = false;
+    State.clips = [];
+    State.selectedId = null;
+    State.editTargetId = null;
+    State.aiSource = '';
+
+    Store.clearKeyCache();
+
+    const editBox = $('#edit-content');
+    if (editBox) editBox.value = '';
+    $('#edit-modal').classList.add('hidden');
+    $('#ai-source').textContent = '';
+    $('#ai-output').textContent = '';
+    renderAiWarning(null);
+    $('#ai-panel').setAttribute('aria-hidden', 'true');
+    $('#lock-pass').value = '';
+
+    render();
+    renderPreview(null);
+    updateLockUi();
+    if (!silent && Store.isEncrypted()) showLock();
+  }
+
+  function updateLockUi() {
+    const on = Store.isEncrypted();
+    const lockBtn = $('#btn-lock');
+    if (lockBtn) {
+      lockBtn.style.display = (on && State.unlocked) ? '' : 'none';
+      lockBtn.setAttribute('aria-label', t('lock_now'));
+      lockBtn.title = t('lock_now');
+    }
+    const nowBtn = $('#btn-lock-now');
+    if (nowBtn) nowBtn.style.display = (on && State.unlocked) ? '' : 'none';
+    const autoRow = $('#autolock-row');
+    if (autoRow) autoRow.style.display = on ? '' : 'none';
+  }
+
   async function tryUnlock() {
     const pass = $('#lock-pass').value;
     const ok = await Store.isPasswordValid(pass);
@@ -653,7 +770,9 @@
     State.lockPass = pass;
     State.unlocked = true;
     State.clips = await Store.getClipsDecrypted(pass);
+    $('#lock-pass').value = '';
     $('#lock-modal').classList.add('hidden');
+    updateLockUi();
     render();
   }
 
@@ -696,13 +815,8 @@
     });
   }
 
-  function applyAccent(id) {
-    document.documentElement.setAttribute('data-accent', id);
-  }
-
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-  }
+  function applyAccent(id) { document.documentElement.setAttribute('data-accent', id); }
+  function applyTheme(theme) { document.documentElement.setAttribute('data-theme', theme); }
 
   function openSettings() {
     const s = Store.getSettings();
@@ -717,6 +831,7 @@
     $('#set-maxchars').value = s.maxChars;
     $('#set-dedup').checked = !!s.dedup;
     $('#set-images').checked = !!s.captureImages;
+    $('#set-autolock').checked = s.autoLock !== false;
     $('#set-ai-provider').value = s.ai.provider || 'openai';
     $('#set-ai-base').value = s.ai.base || '';
     $('#set-ai-model').value = s.ai.model || '';
@@ -727,6 +842,14 @@
     $('#about-version').textContent = (window.NovaConfig && NovaConfig.versionTag) ? NovaConfig.versionTag : 'v1.0.0';
     $('#about-platform').textContent =
       Bridge.platform === 'desktop' ? t('platform_desktop') : Bridge.platform === 'android' ? t('platform_android') : t('platform_web');
+    const info = Store.storageInfo();
+    const backendEl = $('#about-storage');
+    if (backendEl) {
+      backendEl.textContent = t('storage_backend') + ': ' +
+        (info.backend === 'sqlite' ? 'SQLite' : info.backend === 'native' ? 'File (JSON)' : 'localStorage') +
+        ' · ' + fmtBytes(info.bytes);
+    }
+    updateLockUi();
     switchTab('general');
     $('#settings-modal').classList.remove('hidden');
   }
@@ -742,6 +865,7 @@
       startup: $('#set-startup').checked,
       closeToTray: $('#set-tray').checked,
       notify: $('#set-notify').checked,
+      autoLock: $('#set-autolock').checked,
       shortcut: $('#set-shortcut').value,
       theme: $('#set-dark').checked ? 'dark' : 'light',
       lang: $('#set-lang').value,
@@ -759,7 +883,6 @@
     };
     Store.saveSettings(patch);
 
-    // theme / accent / lang
     applyTheme(patch.theme);
     applyI18n(patch.lang);
     document.documentElement.style.setProperty('--preview-w', patch.previewWidth + 'px');
@@ -773,38 +896,77 @@
     toast(t('saved'), 'success');
   }
 
+  /* ============================================================
+     Enable / disable encryption
+
+     Delegates to Store.enableEncryption(), which encrypts the WHOLE existing
+     history (text + images), verifies every round-trip, and only then writes
+     the verifier. Nothing is left in plaintext and nothing is lost on failure.
+     ============================================================ */
   async function toggleEncryption() {
-    const want = $('#set-encrypt').checked;
+    const box = $('#set-encrypt');
+    const want = box.checked;
     const pass = $('#set-encrypt-pass').value;
+    const btn = $('#btn-encrypt-now');
+
     if (want) {
-      if (!pass) { toast(t('encryption_warn'), 'error'); $('#set-encrypt').checked = false; return; }
-      if (!Store.isEncrypted()) {
-        // encrypt existing plaintext clips in place (preserve ids/order)
-        const plain = Store.getClips();
-        const encrypted = [];
-        for (const c of plain) {
-          const payload = await Store.encryptText(c.text || '', pass);
-          encrypted.push(Object.assign({}, c, { encrypted: payload, text: null }));
-        }
-        Store.replaceAll(encrypted);
+      if (!pass) {
+        toast(t('encryption_warn'), 'error');
+        box.checked = false;
+        $('#encrypt-pass-field').style.display = 'none';
+        return;
       }
-      await Store.setPassword(pass);
+      const total = State.clips.length || Store.getClips().length;
+      if (btn) { btn.disabled = true; btn.textContent = t('encryption_working'); }
+      const res = await Store.enableEncryption(pass, {
+        onProgress: (done, all) => {
+          if (btn) btn.textContent = t('encryption_progress').replace('{done}', done).replace('{all}', all);
+        },
+      });
+      if (btn) { btn.disabled = false; btn.textContent = t('encrypt_now'); }
+
+      if (!res.ok) {
+        box.checked = false;
+        toast(t('encryption_failed') + (res.error ? ' (' + res.error + ')' : ''), 'error');
+        await refreshClips();
+        return;
+      }
+
       State.lockPass = pass;
       State.unlocked = true;
-      toast(t('encryption_on'), 'success');
+      $('#set-encrypt-pass').value = '';
+      toast(res.already ? t('encryption_applied')
+        : t('encryption_migrated').replace('{n}', String(res.migrated || 0)), 'success');
     } else {
       if (!Store.isEncrypted()) return;
-      if (!State.lockPass) { toast(t('encryption_warn'), 'error'); $('#set-encrypt').checked = true; return; }
-      const dec = await Store.getClipsDecrypted(State.lockPass);
-      const plain = dec.map(c => { const d = Object.assign({}, c); delete d.encrypted; return d; });
-      Store.replaceAll(plain);
-      await Store.setPassword(null);
+      const pass2 = pass || State.lockPass;
+      if (!pass2) {
+        toast(t('encryption_warn'), 'error');
+        box.checked = true;
+        return;
+      }
+      if (btn) { btn.disabled = true; btn.textContent = t('encryption_working'); }
+      const res = await Store.disableEncryption(pass2, {
+        onProgress: (done, all) => {
+          if (btn) btn.textContent = t('encryption_progress').replace('{done}', done).replace('{all}', all);
+        },
+      });
+      if (btn) { btn.disabled = false; btn.textContent = t('encrypt_now'); }
+
+      if (!res.ok) {
+        box.checked = true;
+        toast(res.error === 'BAD_PASSWORD' ? t('lock_error') : t('encryption_failed'), 'error');
+        return;
+      }
       State.unlocked = false;
       State.lockPass = null;
+      $('#set-encrypt-pass').value = '';
       toast(t('encryption_off'), 'success');
     }
-    $('#set-encrypt').checked = Store.isEncrypted();
+
+    box.checked = Store.isEncrypted();
     $('#encrypt-pass-field').style.display = Store.isEncrypted() ? '' : 'none';
+    updateLockUi();
     await refreshClips();
   }
 
@@ -891,13 +1053,15 @@
     });
     $('#btn-ai').addEventListener('click', () => openAi(getSelectedClip()));
     $('#btn-settings').addEventListener('click', openSettings);
+    const lockBtn = $('#btn-lock');
+    if (lockBtn) lockBtn.addEventListener('click', () => lockNow());
 
     // sidebar footer
     $('#btn-export').addEventListener('click', exportAll);
     $('#btn-clear').addEventListener('click', async () => {
       const ok = await confirmDialog(t('clear_confirm_title'), t('clear_confirm_msg'));
       if (!ok) return;
-      Store.clearClips();
+      await Store.clearClips();
       State.clips = [];
       State.selectedId = null;
       renderPreview(null);
@@ -906,8 +1070,8 @@
     });
 
     // AI panel
-    $('#ai-close').addEventListener('click', () => $('#ai-panel').setAttribute('aria-hidden', 'true'));
-    $('#ai-backdrop').addEventListener('click', () => $('#ai-panel').setAttribute('aria-hidden', 'true'));
+    $('#ai-close').addEventListener('click', closeAi);
+    $('#ai-backdrop').addEventListener('click', closeAi);
     $('#ai-provider').addEventListener('change', syncAiForm);
     $('#ai-actions').addEventListener('click', (e) => {
       const chip = e.target.closest('.chip[data-ai]');
@@ -933,10 +1097,12 @@
       $('#encrypt-pass-field').style.display = $('#set-encrypt').checked ? '' : 'none';
     });
     $('#btn-encrypt-now').addEventListener('click', toggleEncryption);
+    const lockNowBtn = $('#btn-lock-now');
+    if (lockNowBtn) lockNowBtn.addEventListener('click', () => { lockNow(); $('#settings-modal').classList.add('hidden'); });
 
     // edit modal
-    $('#edit-close').addEventListener('click', () => $('#edit-modal').classList.add('hidden'));
-    $('#edit-cancel').addEventListener('click', () => $('#edit-modal').classList.add('hidden'));
+    $('#edit-close').addEventListener('click', () => { $('#edit-content').value = ''; $('#edit-modal').classList.add('hidden'); });
+    $('#edit-cancel').addEventListener('click', () => { $('#edit-content').value = ''; $('#edit-modal').classList.add('hidden'); });
     $('#edit-save').addEventListener('click', saveEdit);
 
     // lock modal
@@ -948,11 +1114,15 @@
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault(); $('#search').focus();
       }
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        if (Store.isEncrypted() && State.unlocked) lockNow();
+      }
       if (e.key === 'Escape') {
         ['#ai-panel', '#settings-modal', '#edit-modal'].forEach(sel => {
           const el = $(sel);
           if (sel === '#settings-modal' && !el.classList.contains('hidden')) saveSettingsFromUI();
-          if (sel === '#ai-panel') el.setAttribute('aria-hidden', 'true');
+          if (sel === '#ai-panel') closeAi();
           else el.classList.add('hidden');
         });
       }
@@ -965,9 +1135,6 @@
         if (e.key === 'Enter' && State.selectedId) { const c = State.clips.find(x => x.id === State.selectedId); if (c) copyClip(c); }
       }
     });
-
-    // resize handling for preview width
-    window.addEventListener('resize', () => {});
   }
 
   /* ============================================================
@@ -984,44 +1151,60 @@
     buildSwatches();
     bindEvents();
 
-    // FIX #2: Storage error handling
     Store.setStorageErrorHandler((err) => {
-      if (err.name === 'QuotaExceededError') {
-        toast(t('storage_full_error'), 'error');
-      } else {
-        toast(t('storage_error'), 'error');
-      }
+      const name = err && err.name;
+      if (name === 'QuotaExceededError' || name === 'STORAGE_FULL') toast(t('storage_full_error'), 'error');
+      else toast(t('storage_error'), 'error');
     });
 
-    // Check storage quota on startup
-    if (Store.isStorageNearQuota()) {
-      toast(t('storage_near_limit'), 'warning');
-    }
+    await Store.refreshUsage();
+    if (Store.isStorageNearQuota()) toast(t('storage_near_limit'));
 
-    // platform badge
+    // platform wiring
     if (Bridge.isElectron) {
       document.getElementById('titlebar').classList.remove('hidden');
       Bridge.registerShortcutFor(s.shortcut || 'Ctrl+Shift+V');
       Bridge.setTray();
     }
     if (Bridge.isAndroid && Bridge.startMonitor) {
-      try { Bridge.startMonitor(); } catch (e) {}
+      try { Bridge.startMonitor(); } catch (e) { /* ignore */ }
     }
 
+    // Lock (drop plaintext from memory) whenever the window goes away.
+    Bridge.onWindowHidden(() => {
+      if (Store.isEncrypted() && State.unlocked && Store.getSettings().autoLock !== false) {
+        lockNow({ silent: true });
+      }
+    });
+    Bridge.onCaptureNow(() => captureClipboard());
+    Bridge.onShortcutTrigger(() => {
+      if (State.locked()) showLock();
+      else $('#search').focus();
+    });
+
+    updateLockUi();
     await refreshClips();
 
-    // capture loop
-    let sig = null;
-    const poll = async () => {
+    // Capture loop.
+    //
+    // Electron: poll a cheap fingerprint channel and only do a full clipboard
+    // read when it actually changed (a full read re-encodes images to base64).
+    // Everywhere else the read *is* the cheap operation, so we read once and
+    // hand the payload straight to captureClipboard().
+    const pollElectron = async () => {
+      try {
+        const sig = await Bridge.clipboardSig();
+        if (sig && sig !== State.lastClipSig) await captureClipboard();
+      } catch (e) { /* ignore */ }
+    };
+    const pollGeneric = async () => {
       try {
         const res = await Bridge.readClipboard();
-        if (res) {
-          // FIX #3: Use hash for more reliable change detection
-          const sig2 = res.image ? 'img:' + res.image.length : 'txt:' + (res.text ? res.text.length : 0);
-          if (sig2 !== sig) { sig = sig2; await captureClipboard(); }
-        }
-      } catch (e) {}
+        if (res && res.signature && res.signature !== State.lastClipSig) await captureClipboard(res);
+      } catch (e) { /* ignore */ }
     };
+    const poll = Bridge.isElectron ? pollElectron : pollGeneric;
+
     if (Bridge.isElectron || Bridge.isAndroid) {
       Bridge.onClipboardChange(() => captureClipboard());
       setInterval(poll, 1500); // safety net
@@ -1031,4 +1214,13 @@
   }
 
   document.addEventListener('DOMContentLoaded', init);
+
+  // Test hook — only exposed when the harness opts in explicitly.
+  if (window.__NOVA_TEST__) {
+    window.NovaTest = {
+      State, captureClipboard, copyClip, openAi, runAi, lockNow, tryUnlock,
+      toggleEncryption, refreshClips, saveEdit, openEdit, selectClip, render,
+      detectType, closeAi,
+    };
+  }
 })();
