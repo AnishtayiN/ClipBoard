@@ -143,6 +143,7 @@
         <button class="icon-btn" id="ai-close">✕</button>
       </div>
       <div class="drawer-scroll">
+        <div id="ai-warning" class="hidden"></div>
         <p class="ai-source" id="ai-source"></p>
         <div class="ai-actions" id="ai-actions">
           <button class="chip" data-ai="summarize">📝 <span data-i18n="ai_summarize">خلاصه</span></button>
@@ -328,20 +329,23 @@
     </div>
   </div>
 
-  <!-- مودال آپدیت (مسدودکننده — نسخهٔ قدیمی از کار می‌افتد) -->
+  <!-- مودال آپدیت (غیرمسدودکننده) -->
   <div class="modal hidden" id="update-modal" aria-hidden="true">
-    <div class="modal-backdrop"></div>
+    <div class="modal-backdrop" id="update-backdrop"></div>
     <div class="modal-box update-box">
       <div class="update-hero">⬇</div>
       <h3 id="update-title" data-i18n="update_title">نسخهٔ جدید منتشر شد</h3>
-      <p class="update-desc" data-i18n="update_desc">برای ادامهٔ استفاده باید نسخهٔ جدید را دانلود و نصب کنید. این نسخه دیگر پشتیبانی نمی‌شود.</p>
+      <p class="update-desc" data-i18n="update_desc">نسخه جدیدی از برنامه منتشر شده است. می‌توانید آن را دانلود کنید یا بعداً این کار را انجام دهید.</p>
       <div class="update-version-wrap">
         <span class="update-version-label" data-i18n="update_version_label">نسخهٔ جدید:</span>
         <span class="update-version" id="update-version"></span>
       </div>
       <div class="update-downloads" id="update-downloads"></div>
       <button class="btn btn-primary btn-block" id="update-releases" data-i18n="update_releases">مشاهدهٔ همهٔ نسخه‌ها در گیت‌هاب</button>
-      <p class="update-note" data-i18n="update_note">با کلیک روی هر یک از گزینه‌های زیر، فایل جدید مستقیماً دانلود می‌شود.</p>
+      <div class="update-actions">
+        <button class="btn btn-ghost" id="update-skip" data-i18n="update_skip">رد کردن این نسخه</button>
+        <button class="btn btn-ghost" id="update-later" data-i18n="update_later">بعداً یادآوری کن</button>
+      </div>
     </div>
   </div>
 

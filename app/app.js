@@ -395,21 +395,68 @@
   }
 
   function openEdit(clip) {
+    // SECURITY: If clip is encrypted, we need password to edit
+    if (clip.encrypted && typeof clip.encrypted === 'object') {
+      if (!State.lockPass) {
+        toast(t('encryption_warn'), 'error');
+        showLock();
+        return;
+      }
+    }
     State.editTargetId = clip.id;
     $('#edit-content').value = clip.text || '';
     $('#edit-modal').classList.remove('hidden');
     $('#edit-content').focus();
   }
 
-  function saveEdit() {
+  // SECURITY FIX #1: saveEdit now properly preserves encryption
+  async function saveEdit() {
     const clip = State.clips.find(c => c.id === State.editTargetId);
     if (!clip) return;
     const val = $('#edit-content').value;
     const det = detectType(val);
-    clip.text = val; clip.type = det.type; clip.meta = det.meta; clip.ts = Date.now();
-    Store.updateClip(clip.id, { text: val, type: det.type, meta: det.meta, ts: clip.ts });
+    
+    // Check if this clip is/was encrypted
+    const wasEncrypted = !!(clip.encrypted && typeof clip.encrypted === 'object');
+    const shouldEncrypt = Store.isEncrypted();
+    
+    if (shouldEncrypt || wasEncrypted) {
+      // Re-encrypt if encryption is enabled or clip was encrypted
+      if (State.lockPass) {
+        // Use async update that handles encryption
+        const updated = await Store.updateClipAsync(
+          clip.id, 
+          { text: val, type: det.type, meta: det.meta, ts: Date.now() },
+          State.lockPass
+        );
+        if (updated) {
+          // Update local state with decrypted view
+          clip.text = val;
+          clip.type = det.type;
+          clip.meta = det.meta;
+          clip.ts = Date.now();
+          // Update the clip in State.clips
+          const idx = State.clips.findIndex(c => c.id === clip.id);
+          if (idx >= 0) {
+            State.clips[idx] = Object.assign({}, clip);
+          }
+        }
+      } else {
+        toast(t('encryption_warn'), 'error');
+        return;
+      }
+    } else {
+      // Plaintext update
+      clip.text = val;
+      clip.type = det.type;
+      clip.meta = det.meta;
+      clip.ts = Date.now();
+      Store.updateClip(clip.id, { text: val, type: det.type, meta: det.meta, ts: clip.ts });
+    }
+    
     $('#edit-modal').classList.add('hidden');
-    render(); selectClip(clip.id);
+    render(); 
+    selectClip(clip.id);
     toast(t('saved'), 'success');
   }
 
@@ -481,11 +528,35 @@
 
   function openAi(clip) {
     const src = clip ? (clip.text || '') : '';
-    $('#ai-source').textContent = src || t('preview_hint');
+    
+    // SECURITY FIX #7: Detect sensitive content before showing AI panel
+    const sensitive = Store.detectSensitiveContent(src);
+    if (sensitive.sensitive) {
+      const sensitiveTypes = sensitive.types.join(', ');
+      $('#ai-source').innerHTML = `<span class="ai-warning">⚠️ ${escapeHtml(t('ai_sensitive_warning'))}</span><br><small class="ai-warning-detail">${escapeHtml(t('ai_sensitive_types') + ': ' + sensitiveTypes)}</small><hr>${escapeHtml(src.slice(0, 500))}${src.length > 500 ? '...' : ''}`;
+      $('#ai-warning').classList.remove('hidden');
+    } else {
+      $('#ai-source').textContent = src || t('preview_hint');
+      $('#ai-warning').classList.add('hidden');
+    }
+    
     $('#ai-output').textContent = '';
     $('#ai-output-wrap').classList.add('hidden');
     syncAiForm();
     $('#ai-panel').setAttribute('aria-hidden', 'false');
+  }
+
+  // SECURITY FIX #7: Show confirmation before sending sensitive data to AI
+  async function confirmAiSend(src) {
+    const sensitive = Store.detectSensitiveContent(src);
+    if (sensitive.sensitive) {
+      const confirmed = await confirmDialog(
+        t('ai_sensitive_title'), 
+        t('ai_sensitive_confirm')
+      );
+      if (!confirmed) return false;
+    }
+    return true;
   }
 
   async function runAi(action) {
@@ -500,6 +571,12 @@
     if (!fields.key && fields.provider !== 'ollama') { toast(t('ai_need_key'), 'error'); return; }
     const src = $('#ai-source').textContent;
     if (!src || src === t('preview_hint')) { toast(t('preview_hint'), 'error'); return; }
+    
+    // SECURITY FIX #7: Confirm before sending sensitive data
+    // Strip warning HTML if present to get actual source
+    const cleanSrc = src.replace(/⚠️.*<\/span>.*<hr>/s, '').replace(/<[^>]*>/g, '');
+    const canSend = await confirmAiSend(cleanSrc);
+    if (!canSend) return;
 
     let instruction = (AI_PROMPTS[action] || AI_PROMPTS.summarize)[fields.provider] || AI_PROMPTS.summarize.custom;
     const customQ = $('#ai-question').value.trim();
@@ -523,7 +600,7 @@
           method: 'POST', headers,
           body: JSON.stringify({
             model: fields.model, max_tokens: 2000,
-            messages: [{ role: 'user', content: instruction + '\n\n' + src }],
+            messages: [{ role: 'user', content: instruction + '\n\n' + cleanSrc }],
           }),
         });
         const data = await resp.json();
@@ -538,7 +615,7 @@
         model: fields.model,
         messages: [
           { role: 'system', content: 'You are a helpful assistant. Reply in the same language as the input unless instructed otherwise.' },
-          { role: 'user', content: instruction + '\n\n' + src },
+          { role: 'user', content: instruction + '\n\n' + cleanSrc },
         ],
         stream: false,
       });
@@ -907,6 +984,20 @@
     buildSwatches();
     bindEvents();
 
+    // FIX #2: Storage error handling
+    Store.setStorageErrorHandler((err) => {
+      if (err.name === 'QuotaExceededError') {
+        toast(t('storage_full_error'), 'error');
+      } else {
+        toast(t('storage_error'), 'error');
+      }
+    });
+
+    // Check storage quota on startup
+    if (Store.isStorageNearQuota()) {
+      toast(t('storage_near_limit'), 'warning');
+    }
+
     // platform badge
     if (Bridge.isElectron) {
       document.getElementById('titlebar').classList.remove('hidden');
@@ -925,8 +1016,9 @@
       try {
         const res = await Bridge.readClipboard();
         if (res) {
-          const s2 = res.image ? 'img:' + res.image.length : 'txt:' + res.text;
-          if (s2 !== sig) { sig = s2; await captureClipboard(); }
+          // FIX #3: Use hash for more reliable change detection
+          const sig2 = res.image ? 'img:' + res.image.length : 'txt:' + (res.text ? res.text.length : 0);
+          if (sig2 !== sig) { sig = sig2; await captureClipboard(); }
         }
       } catch (e) {}
     };

@@ -1,8 +1,13 @@
 /* ============================================================
    NovaClip — update checker + support prompt
+   
+   FIX #8: Update is no longer blocking - user can dismiss or update later
+   
    - On launch, checks the latest GitHub release. If a newer
-     version exists, the app is blocked with a full-screen
-     overlay offering direct-download links.
+     version exists, shows a non-blocking notification with options:
+     * Download now
+     * Skip this version
+     * Remind me later
    - Every 2 days, shows a friendly "star on GitHub" prompt
      with a "Later" (dismiss) option.
    ============================================================ */
@@ -10,6 +15,7 @@
   'use strict';
 
   const SUPPORT_KEY = 'novaclip.support.lastPrompt';
+  const SKIP_VERSION_KEY = 'novaclip.update.skippedVersion';
   const TWO_DAYS = 2 * 24 * 60 * 60 * 1000;
   const RECHECK_INTERVAL = 60 * 60 * 1000; // 1 hour, silently
 
@@ -62,16 +68,27 @@
     return exe.length ? exe : assets.filter((a) => /\.apk$/i.test(a.name || ''));
   }
 
-  /* ---------- update blocking overlay ---------- */
-  let updateBlocked = false;
+  /* ---------- update non-blocking overlay ---------- */
+  let updateShown = false;
+  let currentUpdateData = null;
+
+  function hideUpdate() {
+    $id('update-modal').classList.add('hidden');
+    $id('update-modal').setAttribute('aria-hidden', 'true');
+  }
 
   function showUpdate(data) {
-    updateBlocked = true;
+    updateShown = true;
+    currentUpdateData = data;
 
     const tag = latestTag(data);
     const assets = pickAssets(data);
 
     $id('update-version').textContent = tag || cleanVersion(NovaConfig.version);
+    
+    // Update description to be non-blocking
+    $id('update-modal').querySelector('.update-desc').textContent = 
+      t('update_desc');
 
     const wrap = $id('update-downloads');
     wrap.innerHTML = '';
@@ -94,14 +111,35 @@
     $id('update-modal').setAttribute('aria-hidden', 'false');
   }
 
+  function skipVersion(version) {
+    try {
+      localStorage.setItem(SKIP_VERSION_KEY, version);
+    } catch (e) {}
+  }
+
+  function getSkippedVersion() {
+    try {
+      return localStorage.getItem(SKIP_VERSION_KEY) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   async function checkUpdates() {
-    if (updateBlocked) return false;
+    // Check if this version was skipped
+    const skipped = getSkippedVersion();
+    
     const data = await fetchLatestRelease();
     if (!data) return false;
     const tag = latestTag(data);
     if (!tag) return false;
-    // Only block if the remote version is strictly newer
+    
+    // Skip if user chose to skip this version
+    if (skipped && cleanVersion(tag) === cleanVersion(skipped)) return false;
+    
+    // Only show if the remote version is strictly newer
     if (versionToNum(tag) <= versionToNum(NovaConfig.version)) return false;
+    
     showUpdate(data);
     return true;
   }
@@ -169,6 +207,26 @@
     const releases = $id('update-releases');
     if (releases) releases.addEventListener('click', () => {
       openExternal(NovaConfig.github.releasesUrl);
+    });
+
+    // FIX #8: Skip this version button
+    const skipBtn = $id('update-skip');
+    if (skipBtn) skipBtn.addEventListener('click', () => {
+      const tag = latestTag(currentUpdateData);
+      if (tag) skipVersion(tag);
+      hideUpdate();
+    });
+
+    // FIX #8: Remind me later button
+    const laterBtn = $id('update-later');
+    if (laterBtn) laterBtn.addEventListener('click', () => {
+      hideUpdate();
+    });
+
+    // Update modal backdrop closes the modal
+    const updateBackdrop = $id('update-backdrop');
+    if (updateBackdrop) updateBackdrop.addEventListener('click', () => {
+      hideUpdate();
     });
 
     // any element with data-open-url (e.g. About links)

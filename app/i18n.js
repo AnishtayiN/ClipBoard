@@ -134,6 +134,16 @@ const I18N = {
     about_links: "ارتباط با سازنده",
     about_github: "گیت‌هاب پروژه",
     about_telegram: "تلگرام سازنده",
+    // Security fixes
+    ai_sensitive_warning: "⚠️ این محتوا ممکن است داده حساس باشد",
+    ai_sensitive_types: "انواع شناسایی‌شده",
+    ai_sensitive_title: "داده حساس",
+    ai_sensitive_confirm: "این کلیپ ممکن است حاوی اطلاعات حساس (کلید API، رمز عبور، توکن و...) باشد. آیا مطمئن هستید که می‌خواهید آن را به سرویس هوش مصنوعی ارسال کنید؟",
+    storage_full_error: "فضای ذخیره‌سازی پر شد. لطفاً تاریخچه را پاک کنید یا حداکثر تعداد کلیپ‌ها را کاهش دهید.",
+    storage_error: "خطا در ذخیره‌سازی داده‌ها",
+    storage_near_limit: "فضای ذخیره‌سازی نزدیک به حد مجاز است. قدیمی‌ترین کلیپ‌ها به‌طور خودکار حذف می‌شوند.",
+    update_skip: "رد کردن این نسخه",
+    update_later: "بعداً یادآوری کن",
   },
   en: {
     tagline: "Clipboard Manager",
@@ -267,6 +277,16 @@ const I18N = {
     about_links: "Contact the developer",
     about_github: "Project on GitHub",
     about_telegram: "Developer on Telegram",
+    // Security fixes
+    ai_sensitive_warning: "⚠️ This content may contain sensitive data",
+    ai_sensitive_types: "Detected types",
+    ai_sensitive_title: "Sensitive Data",
+    ai_sensitive_confirm: "This clip may contain sensitive information (API key, password, token, etc.). Are you sure you want to send it to the AI service?",
+    storage_full_error: "Storage is full. Please clear some history or reduce the maximum number of clips.",
+    storage_error: "Error saving data",
+    storage_near_limit: "Storage is near capacity. Old clips will be automatically removed.",
+    update_skip: "Skip this version",
+    update_later: "Remind me later",
   },
 };
 

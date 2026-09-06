@@ -1,8 +1,15 @@
 /* ============================================================
    NovaClip — storage layer
    localStorage backend + optional AES-GCM encryption of clips.
+   
+   SECURITY FIXES:
+   - Proper encryption preservation on update (no plaintext leakage)
+   - Storage error handling with callbacks
+   - Sensitive content detection for AI features
    ============================================================ */
 (function () {
+  'use strict';
+
   const KEYS = {
     clips: 'novaclip.clips',
     settings: 'novaclip.settings',
@@ -32,6 +39,10 @@
     settings: null,
   };
 
+  // Storage error callback for UI feedback
+  let onStorageError = null;
+  function setStorageErrorHandler(fn) { onStorageError = fn; }
+
   function deepClone(o) { return JSON.parse(JSON.stringify(o)); }
 
   function getRaw(key, def) {
@@ -40,8 +51,42 @@
       return v === null ? def : JSON.parse(v);
     } catch (e) { return def; }
   }
+  
   function setRaw(key, val) {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+    try { 
+      localStorage.setItem(key, JSON.stringify(val)); 
+      return true;
+    } catch (e) {
+      // Storage quota exceeded or other error
+      if (onStorageError) onStorageError(e);
+      return false;
+    }
+  }
+
+  // Check if storage is near quota (warn at 4MB of 5MB)
+  function isStorageNearQuota() {
+    let bytes = 0;
+    try {
+      for (const k of Object.keys(localStorage)) {
+        const v = localStorage.getItem(k) || '';
+        bytes += (k.length + v.length) * 2;
+      }
+    } catch (e) {}
+    return bytes > 4 * 1024 * 1024; // Warn at 4MB
+  }
+
+  function getStorageError() {
+    try {
+      // Test if storage is writable
+      const testKey = '__novaclip_storage_test__';
+      localStorage.setItem(testKey, 'test');
+      localStorage.removeItem(testKey);
+      return null;
+    } catch (e) {
+      return e.name === 'QuotaExceededError' 
+        ? 'STORAGE_FULL' 
+        : (e.name || 'STORAGE_ERROR');
+    }
   }
 
   function defaultSettings() { return deepClone(DEFAULT_SETTINGS); }
@@ -127,6 +172,51 @@
     return !!getRaw(KEYS.enc, null);
   }
 
+  /* ---------- sensitive content detection ---------- */
+  // Patterns that indicate sensitive data that shouldn't be sent to AI
+  const SENSITIVE_PATTERNS = [
+    // API keys and tokens
+    { pattern: /sk[-_]?[a-zA-Z0-9]{20,}/gi, label: 'API_KEY' },
+    { pattern: /api[-_]?key\s*[=:]\s*['"]?[a-zA-Z0-9]{16,}/gi, label: 'API_KEY' },
+    { pattern: /bearer\s+[a-zA-Z0-9_\-\.]+/gi, label: 'BEARER_TOKEN' },
+    { pattern: /token\s*[=:]\s*['"]?[a-zA-Z0-9_\-\.]{20,}/gi, label: 'TOKEN' },
+    // Passwords
+    { pattern: /password\s*[=:]\s*['"]?[^\s'"]{4,}/gi, label: 'PASSWORD' },
+    { pattern: /passwd\s*[=:]\s*['"]?[^\s'"]{4,}/gi, label: 'PASSWORD' },
+    // Private keys
+    { pattern: /-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/gi, label: 'PRIVATE_KEY' },
+    // AWS keys
+    { pattern: /AKIA[0-9A-Z]{16}/g, label: 'AWS_KEY' },
+    // Credit cards (basic pattern)
+    { pattern: /\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b/g, label: 'CREDIT_CARD' },
+    // JWT tokens
+    { pattern: /eyJ[a-zA-Z0-9_\-]+\.eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+/g, label: 'JWT' },
+    // Cookie headers
+    { pattern: /cookie\s*[=:]\s*[^;\s]+/gi, label: 'COOKIE' },
+    // Database connection strings
+    { pattern: /(mongodb|postgres|mysql|redis):\/\/[^\s'"]+/gi, label: 'DB_CONNECTION' },
+    // Email addresses (marked as potentially sensitive)
+    { pattern: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi, label: 'EMAIL' },
+  ];
+
+  function detectSensitiveContent(text) {
+    if (!text || typeof text !== 'string') return { sensitive: false, types: [] };
+    
+    const found = [];
+    for (const { pattern, label } of SENSITIVE_PATTERNS) {
+      // Reset lastIndex for global patterns
+      pattern.lastIndex = 0;
+      if (pattern.test(text)) {
+        found.push(label);
+      }
+    }
+    
+    return {
+      sensitive: found.length > 0,
+      types: [...new Set(found)] // unique types
+    };
+  }
+
   /* ---------- clips ---------- */
   function getClipsRaw() {
     if (!cache.clips) cache.clips = getRaw(KEYS.clips, []);
@@ -134,7 +224,25 @@
     return cache.clips;
   }
 
-  function persistClips() { setRaw(KEYS.clips, cache.clips); }
+  function persistClips() { 
+    const success = setRaw(KEYS.clips, cache.clips);
+    if (!success) {
+      // Storage might be full - try to remove oldest non-pinned clips
+      pruneOldClips();
+    }
+    return success;
+  }
+
+  // Remove oldest non-pinned clips to free space
+  function pruneOldClips() {
+    const clips = getClipsRaw();
+    const toRemove = clips.filter(c => !c.pinned && !c.fav).slice(0, 20);
+    if (toRemove.length > 0) {
+      const idsToRemove = new Set(toRemove.map(c => c.id));
+      cache.clips = clips.filter(c => !idsToRemove.has(c.id));
+      setRaw(KEYS.clips, cache.clips);
+    }
+  }
 
   function getClips() {
     const clips = getClipsRaw();
@@ -194,13 +302,38 @@
     return c;
   }
 
-  function updateClip(id, patch) {
+  // SECURITY FIX: updateClip now preserves encryption state
+  // If a clip was encrypted, we MUST re-encrypt when updating text content
+  async function updateClip(id, patch, password) {
     const clips = getClipsRaw();
     const i = clips.findIndex(c => c.id === id);
     if (i < 0) return null;
-    clips[i] = Object.assign({}, clips[i], patch);
+    
+    const original = clips[i];
+    const wasEncrypted = !!(original.encrypted && typeof original.encrypted === 'object');
+    
+    // If text content is being updated and clip was/is encrypted, re-encrypt
+    if (patch.text !== undefined && (wasEncrypted || isEncrypted())) {
+      const pass = password || getSettings().encryptKey;
+      if (pass && patch.text !== null && patch.text !== undefined) {
+        // Re-encrypt the updated text
+        const payload = await encryptText(patch.text, pass);
+        patch = Object.assign({}, patch, { encrypted: payload, text: null });
+      } else if (wasEncrypted) {
+        // Can't update encrypted clip without password - reject
+        console.warn('Cannot update encrypted clip without password');
+        return null;
+      }
+    }
+    
+    clips[i] = Object.assign({}, original, patch);
     persistClips();
     return clips[i];
+  }
+
+  // Async version of updateClip that handles encryption properly
+  async function updateClipAsync(id, patch, password) {
+    return updateClip(id, patch, password);
   }
 
   function deleteClip(id) {
@@ -258,9 +391,11 @@
 
   window.Store = {
     getSettings, saveSettings, getClips, getClipsDecrypted,
-    addClip, addEncryptedClip, updateClip, deleteClip, clearClips, replaceAll, clearCache,
+    addClip, addEncryptedClip, updateClip, updateClipAsync, deleteClip, clearClips, replaceAll, clearCache,
     isEncrypted, setPassword, isPasswordValid, encryptText,
     storageBytes, exportAll, importAll,
+    detectSensitiveContent, isStorageNearQuota, getStorageError,
+    setStorageErrorHandler,
     KEYS,
   };
 })();

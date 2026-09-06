@@ -1,10 +1,16 @@
 /* ============================================================
    NovaClip — Electron main process
    Targets Windows 7 → 11 (Electron 22 / Chromium 108)
+   
+   SECURITY & BUG FIXES:
+   - Hash-based clipboard change detection
+   - Proper IPC for shortcut triggers
+   - Sandbox enabled for security
    ============================================================ */
 const { app, BrowserWindow, ipcMain, clipboard, globalShortcut, Tray, Menu, Notification, dialog, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 let win = null;
 let tray = null;
@@ -16,11 +22,22 @@ let pollTimer = null;
 const APP_DIR = path.join(__dirname, '..', 'app');
 const ICON_PATH = path.join(__dirname, '..', 'build', 'icon.png');
 
+// FIX #3: Hash-based clipboard change detection
 function clipboardSig() {
   const text = clipboard.readText();
-  if (text && text.length) return 't:' + text;
+  if (text && text.length) {
+    // Use MD5 hash of text for reliable change detection
+    const hash = crypto.createHash('md5').update(text).digest('hex');
+    return 't:' + hash;
+  }
   const img = clipboard.readImage();
-  if (img && !img.isEmpty()) return 'i:' + img.getSize().width + 'x' + img.getSize().height + ':' + img.toDataURL().length;
+  if (img && !img.isEmpty()) {
+    // Use hash of image data for reliable image detection
+    const data = img.toPNG();
+    const hash = crypto.createHash('md5').update(data).digest('hex');
+    const size = img.getSize();
+    return 'i:' + size.width + 'x' + size.height + ':' + hash;
+  }
   return 'empty';
 }
 
@@ -33,6 +50,26 @@ function startPolling() {
       if (win && !win.isDestroyed()) win.webContents.send('clipboard-changed');
     }
   }, 700);
+}
+
+// FIX #4: Clipboard format detection for text+image
+function readClipboardFull() {
+  const formats = clipboard.availableFormats();
+  const result = {};
+  
+  // Check for text formats
+  if (formats.some(f => f.includes('text'))) {
+    const text = clipboard.readText();
+    if (text && text.length) result.text = text;
+  }
+  
+  // Check for image formats
+  if (formats.some(f => f.includes('image'))) {
+    const img = clipboard.readImage();
+    if (img && !img.isEmpty()) result.image = img.toDataURL();
+  }
+  
+  return Object.keys(result).length > 0 ? result : null;
 }
 
 function createWindow() {
@@ -49,7 +86,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true, // FIX #6: Enable sandbox for security
       spellcheck: false,
     },
   });
@@ -87,23 +124,20 @@ function createTray() {
 }
 
 /* ---------- IPC ---------- */
+// FIX #4: Use full clipboard reading with format detection
 ipcMain.handle('clipboard:read', () => {
-  const text = clipboard.readText();
-  if (text && text.length) return { text };
-  const img = clipboard.readImage();
-  if (img && !img.isEmpty()) return { image: img.toDataURL() };
-  return {};
+  return readClipboardFull() || {};
 });
 
 ipcMain.on('clipboard:write', (e, text) => {
-  lastClipSig = 't:' + text;
+  lastClipSig = 't:' + crypto.createHash('md5').update(text || '').digest('hex');
   clipboard.writeText(String(text == null ? '' : text));
 });
 
 ipcMain.on('clipboard:write-image', (e, dataUrl) => {
   const img = nativeImage.createFromDataURL(dataUrl);
   if (img && !img.isEmpty()) {
-    lastClipSig = 'i:';
+    lastClipSig = 'i:' + crypto.createHash('md5').update(img.toPNG()).digest('hex');
     clipboard.writeImage(img);
   }
 });
@@ -114,13 +148,21 @@ ipcMain.on('window:close', () => { if (win) win.close(); });
 
 ipcMain.on('window:show', () => { if (win) { win.show(); win.focus(); } });
 
+// FIX #5: Proper shortcut handling with IPC trigger to renderer
 ipcMain.on('shortcut:register', (e, accel) => {
   try {
     globalShortcut.unregisterAll();
     if (accel && typeof accel === 'string' && accel.trim()) {
       globalShortcut.register(accel.trim(), () => {
-        if (!win) createWindow();
-        win.show(); win.focus();
+        // FIX: Send IPC event to renderer BEFORE showing window
+        // This follows the correct architecture: Main -> IPC -> Renderer
+        if (!win || win.isDestroyed()) {
+          createWindow();
+        }
+        win.show();
+        win.focus();
+        // Send trigger event to renderer
+        win.webContents.send('shortcut-trigger');
       });
     }
   } catch (err) { /* ignore invalid accelerator */ }
@@ -180,8 +222,13 @@ if (!gotLock) {
     // default global shortcut
     try {
       globalShortcut.register('CommandOrControl+Shift+V', () => {
-        if (!win) createWindow();
-        win.show(); win.focus();
+        if (!win || win.isDestroyed()) {
+          createWindow();
+        }
+        win.show();
+        win.focus();
+        // FIX #5: Send IPC trigger to renderer
+        win.webContents.send('shortcut-trigger');
       });
     } catch (e) {}
   });
