@@ -7,6 +7,10 @@ const { webcrypto } = require('crypto');
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'app', 'index.html'), 'utf8');
 
+const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const cfgSource = fs.readFileSync(path.join(root, 'app', 'config.js'), 'utf8');
+const cfgVersion = (cfgSource.match(/APP_VERSION\s*=\s*'([^']+)'/) || [])[1] || null;
+
 const dom = new JSDOM(html, {
   url: 'https://novaclip.local/',
   runScripts: 'outside-only',
@@ -65,7 +69,10 @@ setTimeout(async () => {
     check('theme dark', doc.documentElement.getAttribute('data-theme') === 'dark');
 
     // new: config + developer links + update/support modals exist
-    check('NovaConfig version', window.NovaConfig && window.NovaConfig.version === '1.0.0');
+    check('package.json version is valid semver', /^\d+\.\d+\.\d+$/.test(pkg.version));
+    check('config.js APP_VERSION present', !!cfgVersion);
+    check('package.json and config.js versions match', pkg.version === cfgVersion);
+    check('NovaConfig version', window.NovaConfig && window.NovaConfig.version === cfgVersion);
     check('NovaConfig github url', window.NovaConfig && window.NovaConfig.github.url === 'https://github.com/AnishtayiN/ClipBoard');
     check('NovaConfig telegram url', window.NovaConfig && window.NovaConfig.telegram.url === 'https://t.me/AnishtayiN');
     check('about github link present', !!doc.querySelector('.about-link[data-open-url="https://github.com/AnishtayiN/ClipBoard"]'));

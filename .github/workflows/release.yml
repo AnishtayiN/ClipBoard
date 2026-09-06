@@ -2,6 +2,41 @@ name: Build & Release (Windows EXE + Android APK)
 
 on:
   workflow_dispatch:
+    inputs:
+      app_version:
+        description: 'App version (e.g. 1.2.0) / نسخهی برنامه'
+        required: true
+        default: '1.0.0'
+        type: string
+      version_code:
+        description: 'Android versionCode / build number (integer, e.g. 2) / شمارهی نسخهی اندروید'
+        required: true
+        default: '1'
+        type: string
+      build_target:
+        description: 'What to build / چه چیزی ساخته شود'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - windows
+          - android
+      release_notes:
+        description: 'Optional release notes (Markdown) / توضیحات انتشار (اختیاری)'
+        required: false
+        default: ''
+        type: string
+      draft:
+        description: 'Create as a draft release / ساخت به عنوان پیشنویس'
+        required: false
+        default: 'false'
+        type: boolean
+      prerelease:
+        description: 'Mark as prerelease / علامتگذاری به عنوان پیشانتشار'
+        required: false
+        default: 'false'
+        type: boolean
   push:
     tags:
       - 'v*'
@@ -23,10 +58,123 @@ jobs:
       - run: npm ci
       - run: npm run smoke
 
+  configure:
+    name: Resolve version & release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      version_code: ${{ steps.resolve.outputs.version_code }}
+      target: ${{ steps.resolve.outputs.target }}
+      release_notes: ${{ steps.resolve.outputs.release_notes }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      release_name: ${{ steps.resolve.outputs.release_name }}
+      release_files: ${{ steps.resolve.outputs.release_files }}
+      draft: ${{ steps.resolve.outputs.draft }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version and release metadata
+        id: resolve
+        env:
+          INPUT_APP_VERSION: ${{ github.event.inputs.app_version }}
+          INPUT_VERSION_CODE: ${{ github.event.inputs.version_code }}
+          INPUT_TARGET: ${{ github.event.inputs.build_target }}
+          INPUT_RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+          INPUT_DRAFT: ${{ github.event.inputs.draft }}
+          INPUT_PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            VERSION="${INPUT_APP_VERSION:-${PKG_VERSION}}"
+            VERSION_CODE="${INPUT_VERSION_CODE:-1}"
+            TARGET="${INPUT_TARGET:-both}"
+            RELEASE_NOTES="${INPUT_RELEASE_NOTES:-}"
+            DRAFT="${INPUT_DRAFT:-false}"
+            PRERELEASE="${INPUT_PRERELEASE:-false}"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            VERSION="${VERSION#v}"
+            VERSION_CODE="$(node -e "const p='${VERSION}'.split('.').map(Number); console.log((p[0]||0)*100000 + (p[1]||0)*1000 + (p[2]||0))")"
+            TARGET="both"
+            RELEASE_NOTES=""
+            DRAFT="false"
+            PRERELEASE="false"
+          else
+            VERSION="${PKG_VERSION}"
+            VERSION_CODE="$(node -e "const p='${VERSION}'.split('.').map(Number); console.log((p[0]||0)*100000 + (p[1]||0)*1000 + (p[2]||0))")"
+            TARGET="both"
+            RELEASE_NOTES=""
+            DRAFT="false"
+            PRERELEASE="false"
+          fi
+
+          VERSION="${VERSION#v}"
+          VERSION="${VERSION// /}"
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid app_version '${VERSION}'. Expected a semver like 1.2.0."
+            exit 1
+          fi
+          if [[ ! "${VERSION_CODE}" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid version_code '${VERSION_CODE}'. Expected a positive integer."
+            exit 1
+          fi
+          if [[ "${TARGET}" != "both" && "${TARGET}" != "windows" && "${TARGET}" != "android" ]]; then
+            echo "::error::Invalid build_target '${TARGET}'. Expected both, windows or android."
+            exit 1
+          fi
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            RELEASE_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            RELEASE_TAG="v${VERSION}"
+          fi
+
+          case "${TARGET}" in
+            windows)
+              RELEASE_NAME="NovaClip v${VERSION} — Windows"
+              RELEASE_FILES="nova-exe/*.exe"
+              ;;
+            android)
+              RELEASE_NAME="NovaClip v${VERSION} — Android"
+              RELEASE_FILES="nova-apk/*.apk"
+              ;;
+            *)
+              RELEASE_NAME="NovaClip v${VERSION} — Windows & Android"
+              RELEASE_FILES=$'nova-exe/*.exe\nnova-apk/*.apk'
+              ;;
+          esac
+
+          echo "Resolved version: ${VERSION}"
+          echo "Resolved versionCode: ${VERSION_CODE}"
+          echo "Resolved target: ${TARGET}"
+          echo "Resolved release tag: ${RELEASE_TAG}"
+          echo "Resolved release name: ${RELEASE_NAME}"
+
+          {
+            echo "version=${VERSION}"
+            echo "version_code=${VERSION_CODE}"
+            echo "target=${TARGET}"
+            echo "release_tag=${RELEASE_TAG}"
+            echo "release_name=${RELEASE_NAME}"
+            echo "draft=${DRAFT}"
+            echo "prerelease=${PRERELEASE}"
+            echo "release_notes<<EOF"
+            printf '%s' "${RELEASE_NOTES}"
+            printf '\n'
+            echo "EOF"
+            echo "release_files<<EOF"
+            printf '%s' "${RELEASE_FILES}"
+            printf '\n'
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
   build-windows:
     name: Windows installer (7 → 11)
     runs-on: windows-latest
-    needs: test
+    needs: [test, configure]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,7 +182,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Apply requested version
+        run: node scripts/set-version.js "${{ needs.configure.outputs.version }}" "${{ needs.configure.outputs.version_code }}"
       - name: Build Windows installer
+        if: needs.configure.outputs.target != 'android'
         shell: pwsh
         run: |
           $log = npm run build:win 2>&1
@@ -43,7 +194,7 @@ jobs:
           Write-Output $log
           if ($code -ne 0) { exit $code }
       - name: Report failure
-        if: failure()
+        if: failure() && needs.configure.outputs.target != 'android'
         shell: bash
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,7 +202,7 @@ jobs:
           node -e '
             const https = require("https");
             const fs = require("fs");
-            const log = fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000);
+            const log = fs.existsSync("build-log.txt") ? fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000) : "(no build log available)";
             const body = "### ❌ Windows build failed\n```\n" + log + "\n```";
             const payload = JSON.stringify({ body });
             const req = https.request({
@@ -70,7 +221,7 @@ jobs:
             req.write(payload); req.end();
           '
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: success() && needs.configure.outputs.target != 'android'
         with:
           name: nova-exe
           path: |
@@ -81,7 +232,7 @@ jobs:
   build-android:
     name: Android APK (7 → latest)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, configure]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -103,19 +254,22 @@ jobs:
             "$SDKMGR" "platforms;android-34" "build-tools;34.0.0" "platform-tools" > /dev/null 2>&1 || true
           fi
       - run: npm ci
+      - name: Apply requested version
+        run: node scripts/set-version.js "${{ needs.configure.outputs.version }}" "${{ needs.configure.outputs.version_code }}"
       - name: Build Android APK
+        if: needs.configure.outputs.target != 'windows'
         run: |
           set -o pipefail
           npm run build:android 2>&1 | tee build-log.txt
       - name: Report failure
-        if: failure()
+        if: failure() && needs.configure.outputs.target != 'windows'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           node -e '
             const https = require("https");
             const fs = require("fs");
-            const log = fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000);
+            const log = fs.existsSync("build-log.txt") ? fs.readFileSync("build-log.txt", "utf8").replace(/\r/g, "").slice(-8000) : "(no build log available)";
             const body = "### ❌ Android build failed\n```\n" + log + "\n```";
             const payload = JSON.stringify({ body });
             const req = https.request({
@@ -134,18 +288,14 @@ jobs:
             req.write(payload); req.end();
           '
       - name: Rename APK
-        if: success()
+        if: success() && needs.configure.outputs.target != 'windows'
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="$(node -p "require('./package.json').version")"
-          fi
+          VERSION="${{ needs.configure.outputs.version }}"
           VERSION="${VERSION#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mv android/app/build/outputs/apk/release/app-release.apk "NovaClip-v${VERSION}-android.apk"
       - uses: actions/upload-artifact@v4
-        if: success()
+        if: success() && needs.configure.outputs.target != 'windows'
         with:
           name: nova-apk
           path: NovaClip-v*.apk
@@ -157,34 +307,26 @@ jobs:
     needs: [build-windows, build-android]
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve version
-        id: version
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            VERSION="${GITHUB_REF#refs/tags/}"
-          else
-            VERSION="$(node -p "require('./package.json').version")"
-          fi
-          VERSION="${VERSION#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
       - name: Show artifacts
         run: ls -R .
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', steps.version.outputs.version) }}
-          name: NovaClip v${{ steps.version.outputs.version }} — Windows & Android
+          tag_name: ${{ needs.configure.outputs.release_tag }}
+          name: ${{ needs.configure.outputs.release_name }}
           body: |
-            # NovaClip v${{ steps.version.outputs.version }}
+            # NovaClip v${{ needs.configure.outputs.version }}
+
+            ${{ needs.configure.outputs.release_notes }}
 
             A graphical, cross-platform clipboard manager.
 
             ## Windows (7 → 11)
-            - `NovaClip-Setup-${{ steps.version.outputs.version }}-x64.exe` — installer (64-bit)
-            - `NovaClip-Setup-${{ steps.version.outputs.version }}-ia32.exe` — installer (32-bit)
+            - `NovaClip-Setup-${{ needs.configure.outputs.version }}-x64.exe` — installer (64-bit)
+            - `NovaClip-Setup-${{ needs.configure.outputs.version }}-ia32.exe` — installer (32-bit)
 
             ## Android (7.0 → latest)
-            - `NovaClip-v${{ steps.version.outputs.version }}-android.apk`
+            - `NovaClip-v${{ needs.configure.outputs.version }}-android.apk`
 
             ## Features
             - Real-time clipboard history with automatic type detection (text / link / email / color / code / image)
@@ -198,11 +340,9 @@ jobs:
             - In-app developer links (GitHub + Telegram)
 
             See README for full documentation.
-          files: |
-            nova-exe/*.exe
-            nova-apk/*.apk
-          draft: false
-          prerelease: false
+          files: ${{ needs.configure.outputs.release_files }}
+          draft: ${{ needs.configure.outputs.draft }}
+          prerelease: ${{ needs.configure.outputs.prerelease }}
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
