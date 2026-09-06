@@ -1,16 +1,25 @@
 /* ============================================================
    NovaClip — Electron main process
    Targets Windows 7 → 11 (Electron 22 / Chromium 108)
-   
-   SECURITY & BUG FIXES:
-   - Hash-based clipboard change detection
-   - Proper IPC for shortcut triggers
-   - Sandbox enabled for security
+
+   SECURITY & ARCHITECTURE
+   -----------------------
+   - Clipboard change detection uses a SHA-256 content fingerprint that is
+     computed *here* and shipped to the renderer, so main and renderer can
+     never disagree about what "the same clipboard" means (the renderer used
+     to fall back to a length-based signature, which treated "hello123" and
+     "world456" as identical).
+   - A cheap `clipboard:sig` channel lets the renderer poll for *changes*
+     without paying for a full clipboard read (base64 image included).
+   - Persistence lives in the main process (SQLite or an atomic JSON file),
+     not in the renderer's 5 MB localStorage quota.
+   - contextIsolation + sandbox, no nodeIntegration.
    ============================================================ */
 const { app, BrowserWindow, ipcMain, clipboard, globalShortcut, Tray, Menu, Notification, dialog, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { createStore } = require('./storage');
 
 let win = null;
 let tray = null;
@@ -18,27 +27,68 @@ let isQuitting = false;
 let closeToTray = true;
 let lastClipSig = null;
 let pollTimer = null;
+let store = null;
 
 const APP_DIR = path.join(__dirname, '..', 'app');
 const ICON_PATH = path.join(__dirname, '..', 'build', 'icon.png');
 
-// FIX #3: Hash-based clipboard change detection
+/* ============================================================
+   Clipboard fingerprinting
+   ============================================================ */
+
+// SHA-256 (not MD5): it is only used as a change-detection fingerprint, but a
+// collision-resistant digest keeps the value usable if it is ever logged,
+// compared across machines, or reused for dedup keys.
+function sha256(input) {
+  return crypto.createHash('sha256').update(input).digest('hex');
+}
+
+function imageSig(img) {
+  const size = img.getSize();
+  // toBitmap() is a raw BGRA memcpy — much cheaper than re-encoding to PNG on
+  // every poll, and it is exactly what the OS handed us.
+  return 'i:' + size.width + 'x' + size.height + ':' + sha256(img.toBitmap());
+}
+
 function clipboardSig() {
-  const text = clipboard.readText();
-  if (text && text.length) {
-    // Use MD5 hash of text for reliable change detection
-    const hash = crypto.createHash('md5').update(text).digest('hex');
-    return 't:' + hash;
+  let formats = [];
+  try { formats = clipboard.availableFormats() || []; } catch (e) { formats = []; }
+  const hasText = formats.length === 0 || formats.some(f => String(f).indexOf('text') !== -1);
+  const hasImage = formats.length === 0 || formats.some(f => String(f).indexOf('image') !== -1);
+
+  if (hasText) {
+    const text = clipboard.readText();
+    if (text && text.length) return 't:' + sha256(text);
   }
-  const img = clipboard.readImage();
-  if (img && !img.isEmpty()) {
-    // Use hash of image data for reliable image detection
-    const data = img.toPNG();
-    const hash = crypto.createHash('md5').update(data).digest('hex');
-    const size = img.getSize();
-    return 'i:' + size.width + 'x' + size.height + ':' + hash;
+  if (hasImage) {
+    const img = clipboard.readImage();
+    if (img && !img.isEmpty()) return imageSig(img);
   }
   return 'empty';
+}
+
+// Full read. Always carries the signature so the renderer never has to invent
+// its own (that was the source of the length-based false positives).
+function readClipboardFull() {
+  let formats = [];
+  try { formats = clipboard.availableFormats() || []; } catch (e) { formats = []; }
+  const result = {};
+
+  if (formats.length === 0 || formats.some(f => String(f).indexOf('text') !== -1)) {
+    const text = clipboard.readText();
+    if (text && text.length) result.text = text;
+  }
+  if (formats.length === 0 || formats.some(f => String(f).indexOf('image') !== -1)) {
+    const img = clipboard.readImage();
+    if (img && !img.isEmpty()) result.image = img.toDataURL();
+  }
+
+  if (!result.text && !result.image) return { signature: 'empty' };
+
+  result.signature = result.text
+    ? 't:' + sha256(result.text)
+    : imageSig(nativeImage.createFromDataURL(result.image));
+  return result;
 }
 
 function startPolling() {
@@ -47,29 +97,22 @@ function startPolling() {
     const sig = clipboardSig();
     if (sig !== lastClipSig) {
       lastClipSig = sig;
-      if (win && !win.isDestroyed()) win.webContents.send('clipboard-changed');
+      notifyRenderer('clipboard-changed');
     }
   }, 700);
 }
 
-// FIX #4: Clipboard format detection for text+image
-function readClipboardFull() {
-  const formats = clipboard.availableFormats();
-  const result = {};
-  
-  // Check for text formats
-  if (formats.some(f => f.includes('text'))) {
-    const text = clipboard.readText();
-    if (text && text.length) result.text = text;
-  }
-  
-  // Check for image formats
-  if (formats.some(f => f.includes('image'))) {
-    const img = clipboard.readImage();
-    if (img && !img.isEmpty()) result.image = img.toDataURL();
-  }
-  
-  return Object.keys(result).length > 0 ? result : null;
+/* ============================================================
+   Window / tray
+   ============================================================ */
+
+// webContents.send() before the page has loaded is silently dropped — queue the
+// event instead so a global-shortcut press on a cold start still reaches the UI.
+function notifyRenderer(channel, payload) {
+  if (!win || win.isDestroyed()) return;
+  const send = () => { try { win.webContents.send(channel, payload); } catch (e) { /* window went away */ } };
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send);
+  else send();
 }
 
 function createWindow() {
@@ -86,7 +129,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true, // FIX #6: Enable sandbox for security
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -94,6 +137,9 @@ function createWindow() {
   win.loadFile(path.join(APP_DIR, 'index.html'));
 
   win.once('ready-to-show', () => win.show());
+
+  // The renderer drops decrypted plaintext from memory when it hears this.
+  win.on('hide', () => notifyRenderer('window-hidden'));
 
   win.on('close', (e) => {
     if (closeToTray && !isQuitting) {
@@ -105,6 +151,12 @@ function createWindow() {
   win.on('closed', () => { win = null; });
 }
 
+function showMainWindow() {
+  if (!win || win.isDestroyed()) createWindow();
+  win.show();
+  win.focus();
+}
+
 function createTray() {
   try {
     let icon = null;
@@ -112,58 +164,109 @@ function createTray() {
     if (icon && !icon.isEmpty()) icon = icon.resize({ width: 16, height: 16 });
     tray = new Tray(icon || nativeImage.createEmpty());
     const menu = Menu.buildFromTemplate([
-      { label: 'Open NovaClip', click: () => { if (win) { win.show(); win.focus(); } else createWindow(); } },
-      { label: 'Capture now', click: () => { if (win) win.webContents.send('capture-now'); } },
+      { label: 'Open NovaClip', click: () => showMainWindow() },
+      { label: 'Capture now', click: () => notifyRenderer('capture-now') },
       { type: 'separator' },
       { label: 'Quit', click: () => { isQuitting = true; app.quit(); } },
     ]);
     tray.setToolTip('NovaClip');
     tray.setContextMenu(menu);
-    tray.on('double-click', () => { if (win) { win.show(); win.focus(); } });
+    tray.on('double-click', () => showMainWindow());
   } catch (e) { /* tray not critical */ }
 }
 
-/* ---------- IPC ---------- */
-// FIX #4: Use full clipboard reading with format detection
-ipcMain.handle('clipboard:read', () => {
-  return readClipboardFull() || {};
+// Main -> IPC -> Renderer. Registered once from the default shortcut and
+// re-registered whenever the user changes the accelerator.
+function onGlobalShortcut() {
+  showMainWindow();
+  notifyRenderer('shortcut-trigger');
+}
+
+/* ============================================================
+   IPC — clipboard
+   ============================================================ */
+ipcMain.handle('clipboard:sig', () => clipboardSig());
+
+ipcMain.handle('clipboard:read', () => readClipboardFull());
+
+// Both writers return the signature they installed so the renderer can suppress
+// its own echo exactly, instead of guessing.
+ipcMain.handle('clipboard:write', (e, text) => {
+  const value = String(text == null ? '' : text);
+  lastClipSig = 't:' + sha256(value);
+  clipboard.writeText(value);
+  return lastClipSig;
 });
 
-ipcMain.on('clipboard:write', (e, text) => {
-  lastClipSig = 't:' + crypto.createHash('md5').update(text || '').digest('hex');
-  clipboard.writeText(String(text == null ? '' : text));
-});
-
-ipcMain.on('clipboard:write-image', (e, dataUrl) => {
+ipcMain.handle('clipboard:write-image', (e, dataUrl) => {
   const img = nativeImage.createFromDataURL(dataUrl);
-  if (img && !img.isEmpty()) {
-    lastClipSig = 'i:' + crypto.createHash('md5').update(img.toPNG()).digest('hex');
-    clipboard.writeImage(img);
+  if (!img || img.isEmpty()) return lastClipSig;
+  lastClipSig = imageSig(img);
+  clipboard.writeImage(img);
+  return lastClipSig;
+});
+
+/* ============================================================
+   IPC — persistence (main-process store)
+   ============================================================ */
+// Synchronous on purpose: the renderer hydrates its in-memory mirror during
+// script evaluation and must not have to await to read a setting.
+// Lazily created so an early renderer request (before app.whenReady resolved)
+// still gets a working store.
+function getStore() {
+  if (!store) store = createStore(app.getPath('userData'));
+  return store;
+}
+
+ipcMain.on('store:load-all', (e) => {
+  try {
+    const s = getStore();
+    e.returnValue = { ok: true, backend: s.backend, kv: s.getAll(), usage: s.usage() };
+  } catch (err) {
+    e.returnValue = { ok: false, backend: null, kv: {}, usage: null, error: String((err && err.message) || err) };
   }
 });
 
+ipcMain.handle('store:set', (e, key, value) => {
+  try { getStore().set(String(key), value == null ? '' : String(value)); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.name || err) }; }
+});
+
+ipcMain.handle('store:del', (e, key) => {
+  try { getStore().del(String(key)); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.name || err) }; }
+});
+
+ipcMain.handle('store:usage', () => { try { return { ok: true, usage: getStore().usage() }; } catch (err) { return { ok: false }; } });
+
+ipcMain.handle('store:image-put', (e, id, dataUrl) => {
+  try { return { ok: true, id: getStore().putBlob(id, dataUrl) }; }
+  catch (err) { return { ok: false, error: String(err && err.name || err) }; }
+});
+
+ipcMain.handle('store:image-get', (e, id) => {
+  try { return { ok: true, dataUrl: getStore().getBlob(id) }; }
+  catch (err) { return { ok: false, error: String(err && err.name || err) }; }
+});
+
+ipcMain.handle('store:image-del', (e, id) => {
+  try { getStore().delBlob(id); return { ok: true }; }
+  catch (err) { return { ok: false, error: String(err && err.name || err) }; }
+});
+
+/* ============================================================
+   IPC — window / app
+   ============================================================ */
 ipcMain.on('window:minimize', () => { if (win) win.minimize(); });
 ipcMain.on('window:maximize', () => { if (win) { if (win.isMaximized()) win.unmaximize(); else win.maximize(); } });
 ipcMain.on('window:close', () => { if (win) win.close(); });
+ipcMain.on('window:show', () => showMainWindow());
 
-ipcMain.on('window:show', () => { if (win) { win.show(); win.focus(); } });
-
-// FIX #5: Proper shortcut handling with IPC trigger to renderer
 ipcMain.on('shortcut:register', (e, accel) => {
   try {
     globalShortcut.unregisterAll();
     if (accel && typeof accel === 'string' && accel.trim()) {
-      globalShortcut.register(accel.trim(), () => {
-        // FIX: Send IPC event to renderer BEFORE showing window
-        // This follows the correct architecture: Main -> IPC -> Renderer
-        if (!win || win.isDestroyed()) {
-          createWindow();
-        }
-        win.show();
-        win.focus();
-        // Send trigger event to renderer
-        win.webContents.send('shortcut-trigger');
-      });
+      globalShortcut.register(accel.trim(), onGlobalShortcut);
     }
   } catch (err) { /* ignore invalid accelerator */ }
 });
@@ -179,14 +282,12 @@ ipcMain.handle('set-startup', (e, on) => {
 });
 
 ipcMain.on('notify', (e, title, body) => {
-  try { new Notification({ title, body }).show(); } catch (err) {}
+  try { new Notification({ title, body }).show(); } catch (err) { /* ignore */ }
 });
 
 ipcMain.on('external:open', (e, url) => {
-  // فقط آدرس‌های http/https را در مرورگر پیش‌فرض باز می‌کنیم
-  if (url && /^https?:\/\//i.test(String(url))) {
-    shell.openExternal(String(url));
-  }
+  // Only http(s) ever leaves the app.
+  if (url && /^https?:\/\//i.test(String(url))) shell.openExternal(String(url));
 });
 
 ipcMain.handle('file:save', async (e, name, content) => {
@@ -209,31 +310,26 @@ ipcMain.handle('folder:pick', async () => {
   } catch (err) { return null; }
 });
 
-/* ---------- lifecycle ---------- */
-const gotLock = app.requestSingleInstanceLock();
+/* ============================================================
+   Lifecycle
+   ============================================================ */
+const gotLock = typeof app.requestSingleInstanceLock === 'function' ? app.requestSingleInstanceLock() : true;
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
+  app.on('second-instance', () => showMainWindow());
 
   app.whenReady().then(() => {
+    try { getStore(); } catch (e) { store = null; }
     createWindow();
     startPolling();
-    // default global shortcut
-    try {
-      globalShortcut.register('CommandOrControl+Shift+V', () => {
-        if (!win || win.isDestroyed()) {
-          createWindow();
-        }
-        win.show();
-        win.focus();
-        // FIX #5: Send IPC trigger to renderer
-        win.webContents.send('shortcut-trigger');
-      });
-    } catch (e) {}
+    try { globalShortcut.register('CommandOrControl+Shift+V', onGlobalShortcut); } catch (e) { /* ignore */ }
   });
 
-  app.on('before-quit', () => { isQuitting = true; });
-  app.on('will-quit', () => { globalShortcut.unregisterAll(); });
+  app.on('before-quit', () => { isQuitting = true; if (store) { try { store.flush(); } catch (e) { /* ignore */ } } });
+  app.on('will-quit', () => { globalShortcut.unregisterAll(); if (store) { try { store.close(); } catch (e) { /* ignore */ } } });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 }
+
+// Exposed for the test suite (tests/main.test.js) — harmless at runtime.
+module.exports = { sha256, clipboardSig, readClipboardFull, imageSig, notifyRenderer, onGlobalShortcut };

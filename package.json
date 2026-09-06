@@ -10,6 +10,8 @@
     "start": "electron .",
     "dev": "electron .",
     "smoke": "node scripts/smoke.js",
+    "test:unit": "node scripts/test.js",
+    "test": "node scripts/test.js && npm run smoke",
     "set:version": "node scripts/set-version.js",
     "build:win": "electron-builder --win nsis --publish never --x64 --ia32",
     "cap:add:android": "cap add android",

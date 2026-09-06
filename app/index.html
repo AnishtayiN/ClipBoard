@@ -44,6 +44,7 @@
 
       <div class="topbar-actions">
         <button class="icon-btn" id="btn-capture" data-tooltip="capture_now" aria-label="capture">⟳</button>
+        <button class="icon-btn" id="btn-lock" data-tooltip="lock_now" aria-label="lock" style="display:none">🔒</button>
         <button class="icon-btn" id="btn-theme" data-tooltip="theme" aria-label="theme">◐</button>
         <button class="icon-btn" id="btn-lang" data-tooltip="language" aria-label="language">EN</button>
         <button class="icon-btn" id="btn-ai" data-tooltip="ai" aria-label="ai">✦</button>
@@ -86,7 +87,7 @@
           <div class="storage-meter">
             <div class="storage-label">
               <span data-i18n="storage_used">فضای مصرفی</span>
-              <span id="storage-value">0 KB</span>
+              <span><span id="storage-value">0 KB</span> <em class="storage-backend" id="storage-backend"></em></span>
             </div>
             <div class="storage-bar"><div class="storage-fill" id="storage-fill"></div></div>
           </div>
@@ -245,12 +246,16 @@
           <label class="switch-row"><span><b data-i18n="encrypt">رمزنگاری تاریخچه</b><small data-i18n="encrypt_desc">رمز عبور برای قفل‌گشایی لازم می‌شود</small></span><input type="checkbox" id="set-encrypt" /><span class="switch"></span></label>
           <label class="field" id="encrypt-pass-field" style="display:none"><span data-i18n="encrypt_pass">رمز عبور</span><input type="password" id="set-encrypt-pass" /></label>
           <button class="btn btn-ghost btn-block" id="btn-encrypt-now"><span data-i18n="encrypt_now">اعمال رمزنگاری به داده‌های فعلی</span></button>
+          <p class="security-hint" data-i18n="encrypt_migrate_hint">هنگام فعال‌سازی، همهٔ کلیپ‌های موجود (متن و تصویر) رمزنگاری و سپس راستی‌آزمایی می‌شوند؛ در صورت خطا، وضعیت قبلی بازگردانده می‌شود.</p>
+          <label class="switch-row" id="autolock-row" style="display:none"><span><b data-i18n="autolock">قفل خودکار</b><small data-i18n="autolock_desc">با پنهان‌شدن پنجره، متن‌های رمزگشایی‌شده از حافظه پاک می‌شوند</small></span><input type="checkbox" id="set-autolock" checked /><span class="switch"></span></label>
+          <button class="btn btn-ghost btn-block" id="btn-lock-now" style="display:none">🔒 <span data-i18n="lock_now">قفل کردن فوری</span></button>
         </section>
 
         <section class="stab" data-pane="about">
           <div class="about-brand"><div class="logo-badge big">⧉</div><h3>NovaClip</h3><span id="about-version">v1.0.0</span></div>
           <p class="about-text" data-i18n="about_text">مدیر کلیپ‌بورد کراس‌پلتفرم با رابط کاربری مدرن. نسخه‌های ویندوز (۷ تا ۱۱) و اندروید (۷ به بعد).</p>
           <div class="about-platform" id="about-platform"></div>
+          <div class="about-platform" id="about-storage"></div>
           <div class="about-links">
             <span class="about-links-title" data-i18n="about_links">ارتباط با سازنده</span>
             <button class="about-link" data-open-url="https://github.com/AnishtayiN/ClipBoard">

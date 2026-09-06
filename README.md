@@ -157,12 +157,13 @@ ClipBoard/
 │   ├── styles.css          # استایل‌ها، تم‌ها، واکنش‌گرایی
 │   ├── config.js           # نسخه + لینک‌های گیت‌هاب/تلگرام سازنده
 │   ├── i18n.js             # ترجمه‌ها (فارسی/انگلیسی)
-│   ├── bridge.js           # لایه‌ی اتصال به پلتفرم (الکترون/اندروید/مرورگر)
-│   ├── store.js            # ذخیره‌سازی + رمزنگاری AES-GCM
+│   ├── bridge.js           # لایه‌ی اتصال به پلتفرم (الکترون/اندروید/مرورگر) + آداپتور ذخیره‌سازی
+│   ├── store.js            # لایه‌ی ذخیره‌سازی + رمزنگاری AES-GCM + مهاجرت رمزنگاری
 │   ├── updater.js          # بررسی بروزرسانی + یادآوری حمایت
 │   └── app.js              # منطق اصلی برنامه
 ├── electron/               # پوسته‌ی ویندوز (Electron 22 — سازگار با ویندوز ۷)
-│   ├── main.js             # کلیپ‌بورد، میانبر، سینی، IPC
+│   ├── main.js             # کلیپ‌بورد، اثرانگشت SHA-256، میانبر، سینی، IPC
+│   ├── storage.js          # فروشگاه ماندگار در پروسه‌ی اصلی (SQLite یا فایل JSON اتمیک + blob)
 │   └── preload.js          # پل امن بین UI و سیستم
 ├── android/                # پروژه‌ی اندروید (Capacitor 6 — minSdk 24)
 │   └── app/src/main/java/com/novaclip/app/
@@ -170,8 +171,16 @@ ClipBoard/
 │       ├── ClipboardMonitorService.java       # سرویس ثبت خودکار (اندروید ۷–۹)
 │       └── ClipboardAccessibilityService.java # ثبت پس‌زمینه (اندروید ۱۰+)
 ├── build/                  # آیکون‌های برنامه (PNG/ICO)
-├── .github/workflows/      # CI: ساخت EXE + APK و انتشار Release
-└── scripts/                # تست دود (smoke test) + اسکریپت تنظیم نسخه
+├── tests/                  # تست‌های واحد و یکپارچگی (node:test)
+│   ├── store.test.js       # لایه‌ی ذخیره‌سازی، مهاجرت رمزنگاری، هرس، تشخیص داده حساس
+│   ├── main.test.js        # پروسه‌ی اصلی الکترون (اثرانگشت کلیپ‌بورد، IPC، sandbox)
+│   ├── storage.test.js     # فروشگاه ماندگار (نوشتن اتمیک، blob، بازیابی از فایل خراب)
+│   ├── bridge.test.js      # یکپارچگی renderer ↔ فروشگاه پروسه‌ی اصلی
+│   ├── app.test.js         # سناریوهای کامل رابط کاربری
+│   └── contract.test.js    # بررسی ایستای قراردادها (idها، i18n، نبود MD5)
+├── .github/workflows/      # CI: تست‌ها + ساخت EXE + APK و انتشار Release
+└── scripts/                # اجراکننده‌ی تست + تست دود + اسکریپت تنظیم نسخه
+    ├── test.js             # اجرای همه‌ی tests/*.test.js
     ├── smoke.js            # تست دود رابط کاربری
     └── set-version.js      # اعمال نسخه در package.json / config.js / build.gradle
 ```
@@ -195,7 +204,40 @@ ClipBoard/
 ## 🔒 رمزنگاری تاریخچه
 
 در **تنظیمات ← امنیت** گزینه‌ی «رمزنگاری تاریخچه» را فعال کنید و یک رمز عبور تعیین کنید.
-متن کلیپ‌ها با الگوریتم **AES-GCM 256** (مشتق‌سازی کلید PBKDF2 با ۱۵۰,۰۰۰ تکرار) رمزنگاری می‌شوند و بدون رمز عبور قابل خواندن نیستند.
+داده‌ها با **AES-GCM 256** (مشتق‌سازی کلید PBKDF2-SHA256 با ۱۵۰,۰۰۰ تکرار) رمزنگاری می‌شوند و بدون رمز عبور قابل خواندن نیستند.
+
+**مهاجرت کامل و راستی‌آزمایی‌شده.** هنگام فعال‌سازی، *همه‌ی* کلیپ‌های موجود — هم متن و هم تصویر —
+رمزنگاری می‌شوند. هر کلیپ بلافاصله رمزگشایی و با مقدار اصلی مقایسه می‌شود؛ تنها در صورت موفقیتِ
+همه‌ی موارد، کلید رمزنگاری فعال می‌شود و blobهای plaintext پاک می‌گردند. اگر هر مرحله شکست بخورد،
+وضعیت قبلی بازگردانده می‌شود؛ یعنی فعال‌سازی رمزنگاری هرگز نه plaintext باقی می‌گذارد و نه داده‌ای را از بین می‌برد.
+
+**مدل حافظه.** فضای ذخیره‌سازی همیشه ciphertext است. متن رمزگشایی‌شده فقط تا زمانی که جلسه باز است
+در حافظه‌ی renderer نگه داشته می‌شود و با «قفل کردن فوری» (کلید `Ctrl+Shift+L` یا دکمه‌ی 🔒) و همچنین
+به‌صورت خودکار هنگام پنهان‌شدن پنجره (گزینه‌ی «قفل خودکار») کاملاً پاک می‌شود.
+
+**کارایی.** همه‌ی کلیپ‌های یک رمز عبور از یک salt مشترک استفاده می‌کنند (هر کلیپ IV تصادفی خودش را دارد)،
+بنابراین بازکردن قفل N کلیپ فقط یک‌بار PBKDF2 اجرا می‌کند، نه N بار.
+
+---
+
+## 🗄 معماری ذخیره‌سازی
+
+`localStorage` دیگر منبع ذخیره‌سازی اصلی نسخه‌ی ویندوز نیست (سقف ~۵ مگابایت داشت و هر نوشتن،
+کل تاریخچه را دوباره serialize می‌کرد). اکنون:
+
+| لایه | محل | توضیح |
+|---|---|---|
+| متن کلیپ‌ها | فروشگاه پروسه‌ی اصلی | SQLite (در صورت وجود `better-sqlite3`) و در غیر این صورت فایل JSON با نوشتن **اتمیک** در `userData` |
+| تصاویر کامل | blob روی دیسک | به‌صورت باینری، با ارجاع `imageId` — نه base64 داخل JSON |
+| بندانگشتی‌ها | blob جداگانه | فهرست بدون base64 رندر می‌شود و بندانگشتی‌ها غیرهم‌زمان پر می‌شوند |
+| اندروید / مرورگر | `localStorage` | همان API، با blobهای جدا برای تصاویر |
+
+اگر نوشتن به دلیل پر بودن فضا شکست بخورد، قدیمی‌ترین کلیپ‌های **سنجاق‌نشده** هرس می‌شوند و
+عملیات نوشتن تکرار می‌شود؛ نتیجه‌ی همان تلاش دوم به فراخوان برگردانده می‌شود.
+
+> **SQLite اختیاری است.** به‌صورت پیش‌فرض از backend فایل JSON استفاده می‌شود تا ساخت ویندوز
+> به ماژول بومی نیاز نداشته باشد. برای فعال‌سازی SQLite کافی است `better-sqlite3` نصب شود؛
+> کد به‌صورت خودکار آن را تشخیص داده و در صورت نبود، بی‌صدا به فایل JSON بازمی‌گردد.
 
 ---
 
@@ -209,8 +251,17 @@ ClipBoard/
 ## 🧪 تست
 
 ```bash
-npm run smoke
+npm test          # همه‌ی تست‌های واحد + تست دود رابط کاربری
+npm run test:unit # فقط تست‌های tests/
+npm run smoke     # فقط تست دود رابط کاربری
 ```
+
+تست‌ها با `node:test` داخلی نود اجرا می‌شوند و به jsdom نیاز دارند؛ نیازی به الکترون یا دستگاه اندروید نیست.
+پوشش فعلی: لایه‌ی ذخیره‌سازی و مهاجرت رمزنگاری، فروشگاه ماندگار پروسه‌ی اصلی، اثرانگشت کلیپ‌بورد،
+قرارداد preload ↔ bridge، و سناریوهای کامل رابط کاربری (ثبت کلیپ، قفل/بازکردن، پنل هوش مصنوعی).
+
+> تست‌ها روی محیط jsdom اجرا می‌شوند. ساخت واقعی **EXE ویندوز** و **APK اندروید** و اجرای برنامه
+> روی دستگاه، همچنان باید در CI / دستگاه واقعی انجام شود.
 
 ---
 
@@ -309,6 +360,25 @@ npm run build:android  # Android APK → android/app/build/outputs/apk/release/
 - **Windows**: Electron 22 (Chromium 108 — the last line compatible with Windows 7) + electron-builder/NSIS
 - **Android**: Capacitor 6 (minSdk 24) + a native Java clipboard plugin (foreground service + accessibility service)
 - **Shared UI**: vanilla HTML/CSS/JS — no framework, no CDN dependencies, fully offline
+- **Persistence**: main-process store (SQLite when `better-sqlite3` is present, otherwise an
+  atomically-written JSON file in `userData`), with images kept as binary blobs referenced by id
+  instead of base64 inside the clips document. `localStorage` remains the backend on Android/web.
+- **Tests**: `node:test` + jsdom — `npm test`
+
+## 🔒 Security model
+
+- **Clipboard change detection** uses a SHA-256 fingerprint computed in the main process and shipped
+  to the renderer, so both sides agree on what "the same clipboard" means.
+- **Encryption at rest** is AES-GCM 256 / PBKDF2-SHA256 (150k iterations). Enabling it migrates the
+  whole history (text *and* images), verifies every round-trip, and only then flips the switch —
+  any failure rolls the previous state back.
+- **Decrypted text lives in renderer memory only while unlocked**, and is dropped on manual lock
+  (`Ctrl+Shift+L`) and automatically when the window is hidden.
+- **Sensitive-data detection is a heuristic warning, not a protection.** It covers GitHub/Slack/
+  Google/Stripe/Twilio/npm/JWT/PEM/AWS formats, credentials in URLs, connection strings and
+  high-entropy blobs, but it cannot promise to find every secret — the UI says so explicitly.
+- **Renderer sandbox**: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, with an
+  explicit `contextBridge` allow-list.
 
 ## 📄 License
 
