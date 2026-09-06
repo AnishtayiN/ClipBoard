@@ -50,8 +50,8 @@
 
 | ورودی | توضیح | مثال |
 |---|---|---|
-| `App version` | نسخه‌ی برنامه (سِـمور `MAJOR.MINOR.PATCH`) | `1.2.0` |
-| `Android versionCode` | شماره‌ی نسخه‌ی اندروید (عدد صحیح) | `2` |
+| `App version` | نسخه‌ی برنامه (سِـمور `MAJOR.MINOR.PATCH`)؛ **خالی بگذارید** تا از `package.json` خوانده شود | `1.2.0` |
+| `Android versionCode` | شماره‌ی نسخه‌ی اندروید (عدد صحیح)؛ خالی = خودکار از روی نسخه (`major*100000 + minor*1000 + patch`) | `2` |
 | `What to build` | کدام خروجی ساخته شود: `both` (هر دو) / `windows` / `android` | `both` |
 | `Release notes` | توضیحات انتشار (اختیاری، مارک‌داون) | `Initial release` |
 | `Draft` | ساخت به‌صورت پیش‌نویس | `false` یا `true` |
@@ -62,6 +62,19 @@ CI، نسخه را به‌صورت خودکار در فایل‌های `package.
 EXE/APK را با همان نسخه می‌سازد و Release را با تگ `v<version>` منتشر می‌کند.
 برای اعمال محلی نسخه هم می‌توانید از این دستور استفاده کنید:
 `npm run set:version -- 1.2.0 2`
+
+> ℹ️ در رانِ دستی، اگر تگ `v<version>` هنوز در مخزن وجود نداشته باشد، Workflow خودش
+> همان تگ را روی همیت کامیتِ ساخته‌شده می‌سازد و سپس Release را منتشر می‌کند؛ نیازی
+> به ساختن دستی تگ نیست.
+
+### عیب‌یابی انتشار
+
+| خطا | علت | راه‌حل |
+|---|---|---|
+| `⚠️ GitHub Releases requires a tag` | خروجی‌های_job_ `configure` به_job_ `release` نمی‌رسید (نبودِ `configure` در `needs`) | در نسخه‌ی فعلی Workflow اصلاح شده؛ اگر باز هم دیدید، بررسی کنید `release` شامل `needs: [configure, build-windows, build-android]` باشد |
+| `No build artifact matches 'nova-exe/*.exe'` | بیلد ویندوز اجرا/آپلود نشده | `What to build` را کنترل کنید؛ لاگ job مربوطه را ببینید |
+| `Could not create tag ... (HTTP 403)` | `GITHUB_TOKEN` اجازه‌ی ساخت ref ندارد | در تنظیمات مخزن: Settings → Actions → General → Workflow permissions روی **Read and write permissions** |
+| اخطار `Node 20 is being deprecated` | فقط اخطار مربوط به runtime خودِ اکشن‌هاست | ربطی به شکست اجرا ندارد و قابل نادیده‌گرفتن است |
 
 ### روش ۲ — انتشار با تگ گیت‌هاب
 
@@ -248,6 +261,19 @@ Go to **Actions** → **Build & Release (Windows EXE + Android APK)** → **Run 
 | `Prerelease` | Mark as prerelease | `false` / `true` |
 
 CI applies the version to `package.json`, `package-lock.json`, `app/config.js`, `app/index.html` and `android/app/build.gradle` automatically, builds the requested packages and publishes a GitHub Release tagged `v<version>`. To apply a version locally you can run `npm run set:version -- 1.2.0 2`.
+
+`App version` and `Android versionCode` may both be left empty: the version is then read from `package.json` and the Android `versionCode` is derived from it (`major*100000 + minor*1000 + patch`), which keeps the versionCode monotonically increasing so Android can update in place.
+
+> ℹ️ On a manual run the tag `v<version>` does not need to exist: the workflow creates it on the exact commit it built, then publishes the Release against it.
+
+### Troubleshooting a failed release
+
+| Error | Cause | Fix |
+|---|---|---|
+| `⚠️ GitHub Releases requires a tag` | the `release` job could not see the `configure` job outputs (a job's outputs are only exposed to jobs that list it in `needs`), so `tag_name`/`files`/`name` all expanded to empty strings | fixed in the current workflow — `release` now declares `needs: [configure, build-windows, build-android]` |
+| `No build artifact matches 'nova-exe/*.exe'` | the Windows build did not run or did not upload artifacts | check `What to build` and the build job log |
+| `Could not create tag ... (HTTP 403)` | `GITHUB_TOKEN` lacks write permission for refs | Settings → Actions → General → Workflow permissions → **Read and write permissions** |
+| `Node 20 is being deprecated…` warning | runtime warning emitted by the actions themselves | informational only, unrelated to a failing run |
 
 ### Tag Release
 
