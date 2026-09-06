@@ -392,7 +392,7 @@ html[data-platform="desktop"] .app { padding-top: 0; }
 .support-desc { color: var(--text-dim); font-size: 13.5px; line-height: 2; margin-bottom: 8px; }
 .support-box .modal-actions { justify-content: center; }
 
-/* ---------- Update blocking overlay ---------- */
+/* ---------- Update non-blocking overlay ---------- */
 .update-box { width: 500px; padding: 28px 26px; text-align: center; }
 .update-hero { font-size: 46px; margin-bottom: 8px; animation: pulse 2s ease-in-out infinite; }
 @keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
@@ -409,6 +409,28 @@ html[data-platform="desktop"] .app { padding-top: 0; }
 .download-btn .dl-ico { font-size: 16px; }
 .download-btn .dl-name { direction: ltr; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .update-note { font-size: 11.5px; color: var(--text-faint); margin-top: 12px; line-height: 1.8; }
+.update-actions { display: flex; justify-content: center; gap: 10px; margin-top: 12px; }
+
+/* ---------- AI Security Warning ---------- */
+.ai-warning { 
+  color: var(--warn); 
+  font-weight: 600; 
+  display: block;
+  margin-bottom: 4px;
+}
+.ai-warning-detail {
+  color: var(--text-faint);
+  font-size: 11px;
+  display: block;
+  margin-top: 2px;
+}
+#ai-warning {
+  background: rgba(255, 177, 78, 0.1);
+  border: 1px solid rgba(255, 177, 78, 0.3);
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
 
 #update-modal { z-index: 400; }
 #support-modal { z-index: 350; }
