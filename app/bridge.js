@@ -36,6 +36,7 @@
     Bridge.registerShortcutFor = (accel) => { if (native.registerShortcut) native.registerShortcut(accel, () => native.showWindow()); };
     Bridge.setTray = () => { if (native.setTray) native.setTray(); };
     Bridge.setCloseToTray = (v) => { if (native.setCloseToTray) native.setCloseToTray(v); };
+    Bridge.openExternal = (url) => { if (native.openExternal) native.openExternal(url); };
   } else if (isAndroid) {
     const cm = window.Capacitor.Plugins.ClipboardManager;
     Bridge.readClipboard = async () => {
@@ -56,6 +57,14 @@
     Bridge.globalShortcut = () => {};
     Bridge.registerShortcutFor = () => {};
     Bridge.setTray = () => {};
+    Bridge.openExternal = (url) => {
+      try {
+        // در WebView اندروید، _system لینک را در مرورگر خارجی باز می‌کند
+        window.open(url, '_system', 'noopener');
+      } catch (e) {
+        try { window.open(url, '_blank', 'noopener'); } catch (e2) {}
+      }
+    };
   } else {
     // Browser fallback (demo/preview)
     Bridge.readClipboard = async () => {
@@ -104,6 +113,9 @@
     Bridge.globalShortcut = () => {};
     Bridge.registerShortcutFor = () => {};
     Bridge.setTray = () => {};
+    Bridge.openExternal = (url) => {
+      try { window.open(url, '_blank', 'noopener'); } catch (e) {}
+    };
   }
 
   window.Bridge = Bridge;

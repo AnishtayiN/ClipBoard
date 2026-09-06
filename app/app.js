@@ -647,7 +647,7 @@
     $('#set-encrypt').checked = Store.isEncrypted();
     $('#encrypt-pass-field').style.display = Store.isEncrypted() ? '' : 'none';
     $('#set-encrypt-pass').value = '';
-    $('#about-version').textContent = 'v1.0.0';
+    $('#about-version').textContent = (window.NovaConfig && NovaConfig.versionTag) ? NovaConfig.versionTag : 'v1.0.0';
     $('#about-platform').textContent =
       Bridge.platform === 'desktop' ? t('platform_desktop') : Bridge.platform === 'android' ? t('platform_android') : t('platform_web');
     switchTab('general');

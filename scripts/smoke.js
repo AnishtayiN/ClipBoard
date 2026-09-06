@@ -42,7 +42,7 @@ window.localStorage.setItem('novaclip.clips', JSON.stringify(seed));
 window.localStorage.setItem('novaclip.settings', JSON.stringify({ lang: 'fa', theme: 'dark', accent: 'violet', maxHistory: 500, maxChars: 20000, dedup: true, captureImages: true }));
 
 // load app scripts in order
-for (const f of ['i18n.js', 'bridge.js', 'store.js', 'app.js']) {
+for (const f of ['config.js', 'i18n.js', 'bridge.js', 'store.js', 'app.js']) {
   const code = fs.readFileSync(path.join(root, 'app', f), 'utf8');
   window.eval(code);
 }
@@ -63,6 +63,15 @@ setTimeout(async () => {
     check('counts: color=1', doc.getElementById('count-color').textContent === '1');
     check('accent applied', doc.documentElement.getAttribute('data-accent') === 'violet');
     check('theme dark', doc.documentElement.getAttribute('data-theme') === 'dark');
+
+    // new: config + developer links + update/support modals exist
+    check('NovaConfig version', window.NovaConfig && window.NovaConfig.version === '1.0.0');
+    check('NovaConfig github url', window.NovaConfig && window.NovaConfig.github.url === 'https://github.com/AnishtayiN/ClipBoard');
+    check('NovaConfig telegram url', window.NovaConfig && window.NovaConfig.telegram.url === 'https://t.me/AnishtayiN');
+    check('about github link present', !!doc.querySelector('.about-link[data-open-url="https://github.com/AnishtayiN/ClipBoard"]'));
+    check('about telegram link present', !!doc.querySelector('.about-link[data-open-url="https://t.me/AnishtayiN"]'));
+    check('update modal present', !!doc.getElementById('update-modal'));
+    check('support modal present', !!doc.getElementById('support-modal'));
 
     // select the text item -> preview shows
     const textItem = doc.querySelector('#list .item[data-id="c1"]');

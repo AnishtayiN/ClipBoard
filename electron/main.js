@@ -2,7 +2,7 @@
    NovaClip — Electron main process
    Targets Windows 7 → 11 (Electron 22 / Chromium 108)
    ============================================================ */
-const { app, BrowserWindow, ipcMain, clipboard, globalShortcut, Tray, Menu, Notification, dialog, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, clipboard, globalShortcut, Tray, Menu, Notification, dialog, nativeImage, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -138,6 +138,13 @@ ipcMain.handle('set-startup', (e, on) => {
 
 ipcMain.on('notify', (e, title, body) => {
   try { new Notification({ title, body }).show(); } catch (err) {}
+});
+
+ipcMain.on('external:open', (e, url) => {
+  // فقط آدرس‌های http/https را در مرورگر پیش‌فرض باز می‌کنیم
+  if (url && /^https?:\/\//i.test(String(url))) {
+    shell.openExternal(String(url));
+  }
 });
 
 ipcMain.handle('file:save', async (e, name, content) => {
