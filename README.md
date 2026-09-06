@@ -43,7 +43,27 @@
 2. لینک **دانلود مستقیم** فایل نصب جدید (EXE برای ویندوز / APK برای اندروید) نمایش داده می‌شود.
 3. کاربر با کلیک روی آن، فایل جدید را مستقیماً دانلود می‌کند.
 
-### چگونه یک نسخهٔ جدید منتشر کنیم
+### روش ۱ — رانِ دستی با ورود نسخه (پیشنهادی)
+
+در صفحه‌ی **Actions** مخزن، گزینه‌ی **«Build & Release (Windows EXE + Android APK)»** را انتخاب کنید و
+روی **Run workflow** بزنید. سپس این ورودی‌ها را پر کنید:
+
+| ورودی | توضیح | مثال |
+|---|---|---|
+| `App version` | نسخه‌ی برنامه (سِـمور `MAJOR.MINOR.PATCH`) | `1.2.0` |
+| `Android versionCode` | شماره‌ی نسخه‌ی اندروید (عدد صحیح) | `2` |
+| `What to build` | کدام خروجی ساخته شود: `both` (هر دو) / `windows` / `android` | `both` |
+| `Release notes` | توضیحات انتشار (اختیاری، مارک‌داون) | `Initial release` |
+| `Draft` | ساخت به‌صورت پیش‌نویس | `false` یا `true` |
+| `Prerelease` | علامت‌گذاری به‌عنوان پیش‌انتشار | `false` یا `true` |
+
+CI، نسخه را به‌صورت خودکار در فایل‌های `package.json`، `package-lock.json`،
+`app/config.js`، `app/index.html` و `android/app/build.gradle` اعمال می‌کند، سپس
+EXE/APK را با همان نسخه می‌سازد و Release را با تگ `v<version>` منتشر می‌کند.
+برای اعمال محلی نسخه هم می‌توانید از این دستور استفاده کنید:
+`npm run set:version -- 1.2.0 2`
+
+### روش ۲ — انتشار با تگ گیت‌هاب
 
 1. نسخه را در **هر دو** فایل زیر افزایش دهید (مثلاً `1.0.0` → `1.0.1`):
    - `package.json` → فیلد `version`
@@ -138,7 +158,9 @@ ClipBoard/
 │       └── ClipboardAccessibilityService.java # ثبت پس‌زمینه (اندروید ۱۰+)
 ├── build/                  # آیکون‌های برنامه (PNG/ICO)
 ├── .github/workflows/      # CI: ساخت EXE + APK و انتشار Release
-└── scripts/                # تست دود (smoke test) رابط کاربری
+└── scripts/                # تست دود (smoke test) + اسکریپت تنظیم نسخه
+    ├── smoke.js            # تست دود رابط کاربری
+    └── set-version.js      # اعمال نسخه در package.json / config.js / build.gradle
 ```
 
 ---
@@ -209,6 +231,33 @@ Copy anything and NovaClip saves, categorizes and re-serves it instantly.
 - Automatic update check (blocks old builds + direct download links)
 - Support reminder every 2 days (GitHub star) with a "Later" option
 - Developer links (GitHub + Telegram) in the About section
+
+## 🔀 Release with a custom version
+
+### Manual Run (recommended)
+
+Go to **Actions** → **Build & Release (Windows EXE + Android APK)** → **Run workflow**, then fill in:
+
+| Input | Description | Example |
+|---|---|---|
+| `App version` | App version (semver `MAJOR.MINOR.PATCH`) | `1.2.0` |
+| `Android versionCode` | Android build number (integer) | `2` |
+| `What to build` | `both`, `windows` or `android` | `both` |
+| `Release notes` | Optional Markdown release notes | `Initial release` |
+| `Draft` | Create as draft | `false` / `true` |
+| `Prerelease` | Mark as prerelease | `false` / `true` |
+
+CI applies the version to `package.json`, `package-lock.json`, `app/config.js`, `app/index.html` and `android/app/build.gradle` automatically, builds the requested packages and publishes a GitHub Release tagged `v<version>`. To apply a version locally you can run `npm run set:version -- 1.2.0 2`.
+
+### Tag Release
+
+1. Bump the version in `package.json` (`version`) and `app/config.js` (`APP_VERSION`).
+2. Commit the changes and push a tag:
+   ```bash
+   git tag v1.2.0
+   git push origin v1.2.0
+   ```
+3. CI builds Windows EXE + Android APK and publishes a Release with that tag automatically.
 
 ## ⬇️ Download
 
