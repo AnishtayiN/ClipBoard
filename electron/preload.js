@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('NovaNative', {
   setCloseToTray: (v) => ipcRenderer.send('set-close-to-tray', v),
 
   notify: (title, body) => ipcRenderer.send('notify', title, body),
+  openExternal: (url) => ipcRenderer.send('external:open', url),
   saveFile: (name, content) => ipcRenderer.invoke('file:save', name, content),
   pickFolder: () => ipcRenderer.invoke('folder:pick'),
 });

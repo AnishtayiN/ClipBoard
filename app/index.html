@@ -250,6 +250,25 @@
           <div class="about-brand"><div class="logo-badge big">⧉</div><h3>NovaClip</h3><span id="about-version">v1.0.0</span></div>
           <p class="about-text" data-i18n="about_text">مدیر کلیپ‌بورد کراس‌پلتفرم با رابط کاربری مدرن. نسخه‌های ویندوز (۷ تا ۱۱) و اندروید (۷ به بعد).</p>
           <div class="about-platform" id="about-platform"></div>
+          <div class="about-links">
+            <span class="about-links-title" data-i18n="about_links">ارتباط با سازنده</span>
+            <button class="about-link" data-open-url="https://github.com/AnishtayiN/ClipBoard">
+              <span class="about-link-ico gh">⧉</span>
+              <span class="about-link-body">
+                <b data-i18n="about_github">گیت‌هاب پروژه</b>
+                <small>github.com/AnishtayiN/ClipBoard</small>
+              </span>
+              <span class="about-link-arrow">↗</span>
+            </button>
+            <button class="about-link" data-open-url="https://t.me/AnishtayiN">
+              <span class="about-link-ico tg">✈</span>
+              <span class="about-link-body">
+                <b data-i18n="about_telegram">تلگرام سازنده</b>
+                <small>@AnishtayiN</small>
+              </span>
+              <span class="about-link-arrow">↗</span>
+            </button>
+          </div>
         </section>
       </div>
     </div>
@@ -295,11 +314,44 @@
     </div>
   </div>
 
+  <!-- مودال حمایت (هر ۲ روز یک‌بار) -->
+  <div class="modal hidden" id="support-modal" aria-hidden="true">
+    <div class="modal-backdrop" id="support-backdrop"></div>
+    <div class="modal-box support-box">
+      <div class="support-hero">⭐</div>
+      <h3 data-i18n="support_title">از NovaClip حمایت کنید ⭐</h3>
+      <p class="support-desc" data-i18n="support_desc">اگر NovaClip برایتان مفید بوده، با یک ستاره در گیت‌هاب از ما حمایت کنید. فقط چند ثانیه وقت می‌گیرد!</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="support-later" data-i18n="support_later">بعداً</button>
+        <button class="btn btn-primary" id="support-star" data-i18n="support_star">⭐ ستاره در گیت‌هاب</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- مودال آپدیت (مسدودکننده — نسخهٔ قدیمی از کار می‌افتد) -->
+  <div class="modal hidden" id="update-modal" aria-hidden="true">
+    <div class="modal-backdrop"></div>
+    <div class="modal-box update-box">
+      <div class="update-hero">⬇</div>
+      <h3 id="update-title" data-i18n="update_title">نسخهٔ جدید منتشر شد</h3>
+      <p class="update-desc" data-i18n="update_desc">برای ادامهٔ استفاده باید نسخهٔ جدید را دانلود و نصب کنید. این نسخه دیگر پشتیبانی نمی‌شود.</p>
+      <div class="update-version-wrap">
+        <span class="update-version-label" data-i18n="update_version_label">نسخهٔ جدید:</span>
+        <span class="update-version" id="update-version"></span>
+      </div>
+      <div class="update-downloads" id="update-downloads"></div>
+      <button class="btn btn-primary btn-block" id="update-releases" data-i18n="update_releases">مشاهدهٔ همهٔ نسخه‌ها در گیت‌هاب</button>
+      <p class="update-note" data-i18n="update_note">با کلیک روی هر یک از گزینه‌های زیر، فایل جدید مستقیماً دانلود می‌شود.</p>
+    </div>
+  </div>
+
   <div id="toasts" class="toasts"></div>
 
+  <script src="config.js"></script>
   <script src="i18n.js"></script>
   <script src="bridge.js"></script>
   <script src="store.js"></script>
   <script src="app.js"></script>
+  <script src="updater.js"></script>
 </body>
 </html>
