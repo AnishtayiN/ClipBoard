@@ -708,6 +708,10 @@
    * Update a clip while preserving its encryption state.
    * Text changes on an encrypted (or encryption-enabled) history are
    * re-encrypted before anything touches storage — plaintext is never written.
+   *
+   * Replacing an image while the history is encrypted stores the *new* bytes
+   * as ciphertext and then deletes the *old* plaintext blob — a stale image
+   * blob must never outlive the edit that replaced it.
    */
   async function updateClip(id, patch, password) {
     const clips = getClipsRaw();
@@ -730,21 +734,47 @@
       }
     }
 
-    // A new full image on an encrypted history must be encrypted too.
-    if (next.data && (wasEncrypted || isEncrypted())) {
-      if (password) {
-        next.encImage = await encryptText(String(next.data), password, ensureSalt());
-        next.data = null;
-        next.imageId = null;
-        next.thumb = null;
-        next.thumbId = null;
-      } else if (wasEncrypted) {
-        return null;
-      }
+    // A replacement image on an encrypted history must be encrypted too. This
+    // also covers the mixed state where the clip is still a plaintext-blob row
+    // inside an encrypted history: without the password we refuse outright —
+    // writing plaintext there would be a back door.
+    const replacesImage = !!next.data;
+    if (replacesImage && (wasEncrypted || isEncrypted())) {
+      if (!password) return null;
+      next.encImage = await encryptText(String(next.data), password, ensureSalt());
+      next.data = null;
+      next.imageId = null;
+      next.thumb = null;
+      next.thumbId = null;
+    } else if (replacesImage && (original.type === 'image' || next.type === 'image')) {
+      // Plaintext history: the new bytes must be externalised as a fresh blob.
+      // Drop the old id references so serializeRows() writes the new image (and
+      // a fresh thumbnail) and the old blobs are cleaned up below.
+      next.imageId = null;
+      next.thumbId = null;
+      if (patch.thumb == null) next.thumb = (await makeThumb(String(next.data))) || null;
     }
 
-    clips[i] = Object.assign({}, original, next);
-    await commit();
+    const oldImageId = original.imageId;
+    const oldThumbId = original.thumbId;
+    const merged = Object.assign({}, original, next);
+
+    clips[i] = merged;
+    const ok = await commit();
+
+    // The replacement is durable — only now is it safe to delete the blobs
+    // the previous version referenced. Blob deletion after a failed commit
+    // would destroy bytes the on-disk history still points at.
+    if (ok) {
+      if (oldImageId && merged.imageId !== oldImageId) {
+        try { await adapter().imageDel(oldImageId); } catch (e) { /* ignore */ }
+        imageCache.delete(oldImageId);
+      }
+      if (oldThumbId && merged.thumbId !== oldThumbId) {
+        try { await adapter().imageDel(oldThumbId); } catch (e) { /* ignore */ }
+        thumbCache.delete(oldThumbId);
+      }
+    }
     return decorate(clips[i]);
   }
 
@@ -754,17 +784,24 @@
     const clips = getClipsRaw();
     const victim = clips.find(c => c.id === id);
     cache.clips = clips.filter(c => c.id !== id);
-    if (victim) await dropBlobs(victim);
-    return commit();
+    const ok = await commit();
+    // Only drop the bytes once the removal is durable on the backend; deleting
+    // them first would leave the on-disk history pointing at missing blobs if
+    // the write failed.
+    if (ok && victim) await dropBlobs(victim);
+    return ok;
   }
 
   async function clearClips() {
-    const clips = getClipsRaw();
-    for (const c of clips) dropBlobs(c);
+    const clips = getClipsRaw().slice();
     imageCache.clear();
     thumbCache.clear();
     cache.clips = [];
-    return commit();
+    const ok = await commit();
+    if (ok) {
+      for (const c of clips) await dropBlobs(c);
+    }
+    return ok;
   }
 
   async function replaceAll(clips) {
@@ -804,6 +841,21 @@
       return { ok: false, error, failed: failed || [], migrated, total };
     };
 
+    // Resume path: a crash between "encrypted history committed" and "verifier
+    // written" leaves rows already carrying ciphertext but encryption OFF. They
+    // must decrypt with the supplied password, otherwise stamping a new
+    // verifier would lock undecryptable rows behind a different key.
+    for (const row of rows) {
+      if (row.encrypted && typeof row.encrypted === 'object') {
+        try { await decryptText(row.encrypted, password); }
+        catch (e) { return await abort('RESUME_PASSWORD_MISMATCH', [row.id]); }
+      }
+      if (row.encImage && typeof row.encImage === 'object') {
+        try { await decryptText(row.encImage, password); }
+        catch (e) { return await abort('RESUME_PASSWORD_MISMATCH', [row.id]); }
+      }
+    }
+
     for (let i = 0; i < rows.length; i++) {
       const src = rows[i];
       const row = Object.assign({}, src);
@@ -826,22 +878,26 @@
         if (!dataUrl && row.imageId) {
           try { dataUrl = await adapter().imageGet(row.imageId); } catch (e) { dataUrl = null; }
         }
-        if (dataUrl) {
-          let payload;
-          try { payload = await encryptText(dataUrl, password, salt); }
-          catch (e) { return await abort('ENCRYPT_FAILED', [row.id]); }
-          let check;
-          try { check = await decryptText(payload, password); }
-          catch (e) { return await abort('VERIFY_FAILED', [row.id]); }
-          if (check !== dataUrl) return await abort('VERIFY_FAILED', [row.id]);
-          row.encImage = payload;
-          // Both blobs hold plaintext pixels — queue them for deletion once
-          // the ciphertext is safely on disk.
-          if (row.imageId) { blobsToDelete.push(row.imageId); row.imageId = null; }
-          if (row.thumbId) { blobsToDelete.push(row.thumbId); row.thumbId = null; }
-          row.data = null;
-          row.thumb = null;
-        }
+        // An image we cannot read cannot be encrypted — carrying it into the
+        // "encrypted" history would leave plaintext pixels behind and silently
+        // break the promise that encryption covers the whole history. Roll
+        // back and tell the caller exactly which clip is unreadable.
+        if (!dataUrl) return await abort('IMAGE_READ_FAILED', [row.id]);
+
+        let payload;
+        try { payload = await encryptText(dataUrl, password, salt); }
+        catch (e) { return await abort('ENCRYPT_FAILED', [row.id]); }
+        let check;
+        try { check = await decryptText(payload, password); }
+        catch (e) { return await abort('VERIFY_FAILED', [row.id]); }
+        if (check !== dataUrl) return await abort('VERIFY_FAILED', [row.id]);
+        row.encImage = payload;
+        // Both blobs hold plaintext pixels — queue them for deletion once
+        // the ciphertext is safely on disk.
+        if (row.imageId) { blobsToDelete.push(row.imageId); row.imageId = null; }
+        if (row.thumbId) { blobsToDelete.push(row.thumbId); row.thumbId = null; }
+        row.data = null;
+        row.thumb = null;
       }
 
       out.push(row);
@@ -933,6 +989,13 @@
     cache.clips = out;
     const persisted = await commit();
     if (!persisted) {
+      // The plaintext document never became durable — remove the plaintext
+      // image blobs we already wrote so no decrypted bytes leak on disk while
+      // the history stays encrypted.
+      for (const id of orphanBlobs) {
+        try { await adapter().imageDel(id); } catch (e) { /* ignore */ }
+        imageCache.delete(id);
+      }
       cache.clips = backup;
       await commit();
       return { ok: false, error: 'PERSIST_FAILED', migrated, total };
@@ -951,8 +1014,21 @@
     const clips = [];
     for (const c of getClipsRaw()) {
       const row = Object.assign({}, c);
-      if (row.imageId && !row.data) {
-        try { row.data = await adapter().imageGet(row.imageId); } catch (e) { row.data = null; }
+      // Embed the actual image bytes so the export is self-contained. A blob
+      // that cannot be read means this export would silently lose an image —
+      // fail loudly instead of producing a backup that cannot be restored.
+      if (row.type === 'image' && !row.data && !row.encImage) {
+        let dataUrl = null;
+        if (row.imageId) {
+          try { dataUrl = await adapter().imageGet(row.imageId); } catch (e) { dataUrl = null; }
+        }
+        if (!dataUrl) {
+          const e = new Error('image blob could not be read');
+          e.code = 'IMAGE_READ_FAILED';
+          e.clipId = row.id;
+          throw e;
+        }
+        row.data = dataUrl;
       }
       delete row.thumbId;                 // thumbnails are rebuilt on import
       delete row.thumb;
@@ -967,42 +1043,121 @@
     }, null, 2);
   }
 
+  function importError(code, clipId) {
+    const e = new Error(code);
+    e.code = code;
+    if (clipId !== undefined) e.clipId = clipId;
+    return e;
+  }
+
   async function importAll(json, password) {
     const obj = JSON.parse(json);
-    if (!obj || !Array.isArray(obj.clips)) throw new Error('bad format');
+    if (!obj || !Array.isArray(obj.clips)) throw importError('BAD_FORMAT');
 
     let incoming = obj.clips.slice();
 
-    // An encrypted export has to be unlocked before it can be merged.
+    // An encrypted export has to be unlocked before it can be merged. AES-GCM
+    // cannot distinguish "wrong password" from "corrupted payload" on a single
+    // clip, so decrypt everything first: if *every* clip fails it is the
+    // password; if only some fail, those clips are corrupted.
     if (obj.encrypted) {
-      if (!password) { const e = new Error('password'); e.code = 'password'; throw e; }
-      incoming = await Promise.all(incoming.map(async (c) => {
+      if (!password) throw importError('password');
+      const out = [];
+      const failed = [];
+      for (const c of incoming) {
         const copy = Object.assign({}, c);
-        if (copy.encrypted) { copy.text = await decryptText(copy.encrypted, password); copy.encrypted = null; }
-        if (copy.encImage) { copy.data = await decryptText(copy.encImage, password); copy.encImage = null; }
-        return copy;
-      }));
+        try {
+          if (copy.encrypted) {
+            copy.text = await decryptText(copy.encrypted, password);
+            copy.encrypted = null;
+          }
+          if (copy.encImage) {
+            copy.data = await decryptText(copy.encImage, password);
+            copy.encImage = null;
+            copy.imageId = null;
+            copy.thumbId = null;
+            copy.thumb = null;
+          }
+          out.push(copy);
+        } catch (e) {
+          failed.push(c.id);
+        }
+      }
+      if (failed.length) {
+        const all = failed.length === incoming.length;
+        throw importError(all ? 'password' : 'DECRYPT_FAILED', all ? undefined : failed[0]);
+      }
+      incoming = out;
     }
 
     // If this device encrypts at rest, imported clips must be re-encrypted —
-    // importing must never become a plaintext back door.
-    if (isEncrypted() && password) {
+    // importing must never become a plaintext back door. That needs the local
+    // password even when the export itself was already decrypted above.
+    if (isEncrypted()) {
+      if (!password) throw importError('password');
       const salt = ensureSalt();
-      incoming = await Promise.all(incoming.map(async (c) => {
+      const encrypted = [];
+      for (const c of incoming) {
         const copy = Object.assign({}, c);
-        if (copy.text != null) { copy.encrypted = await encryptText(String(copy.text), password, salt); copy.text = null; }
+        if (copy.text != null) {
+          copy.encrypted = await encryptText(String(copy.text), password, salt);
+          copy.text = null;
+        }
         if (copy.type === 'image' && copy.data) {
           copy.encImage = await encryptText(String(copy.data), password, salt);
           copy.data = null; copy.imageId = null; copy.thumb = null; copy.thumbId = null;
         }
-        return copy;
-      }));
+        encrypted.push(copy);
+      }
+      incoming = encrypted;
     }
 
-    cache.clips = incoming;
+    // Normalize plaintext rows before they replace the local history:
+    //   • image bytes embedded in the file are authoritative — a blob id from
+    //     another device is meaningless here and must be re-persisted locally;
+    //   • an image row with no readable bytes cannot be imported faithfully;
+    //   • ids must be unique or the UI (which looks clips up by id) breaks.
+    const oldRows = getClipsRaw().slice();
+    const oldBlobIds = new Set();
+    for (const r of oldRows) {
+      if (r.imageId) oldBlobIds.add(r.imageId);
+      if (r.thumbId) oldBlobIds.add(r.thumbId);
+    }
+    const seen = new Set();
+    const out = [];
+    for (const c of incoming) {
+      const copy = Object.assign({}, c);
+      if (copy.type === 'image' && !copy.encImage) {
+        if (copy.data) {
+          copy.imageId = null;
+          copy.thumbId = null;
+          // Exports deliberately strip thumbnails; rebuild one so the imported
+          // history stays list-ready after a restart (null when the platform
+          // cannot rasterise — headless tests — callers fall back gracefully).
+          if (copy.thumb == null) copy.thumb = (await makeThumb(copy.data)) || null;
+        } else {
+          throw importError('IMAGE_MISSING', copy.id);
+        }
+      }
+      let id = copy.id;
+      if (id == null || id === '' || seen.has(id)) id = uid('c');
+      while (seen.has(id)) id = uid('c');
+      copy.id = id;
+      seen.add(id);
+      out.push(copy);
+    }
+
+    cache.clips = out;
     const ok = await commit();
     if (!ok) throw new Error('persist failed');
-    return incoming.length;
+    // The import replaced the whole history: the blobs the previous history
+    // referenced are now orphaned (fresh ones were written by commit()).
+    // Delete them only after the new document is durable.
+    for (const id of oldBlobIds) {
+      try { await adapter().imageDel(id); } catch (e) { /* ignore */ }
+      imageCache.delete(id);
+    }
+    return out.length;
   }
 
   /* ============================================================

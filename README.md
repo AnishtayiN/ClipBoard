@@ -172,9 +172,9 @@ ClipBoard/
 │       └── ClipboardAccessibilityService.java # ثبت پس‌زمینه (اندروید ۱۰+)
 ├── build/                  # آیکون‌های برنامه (PNG/ICO)
 ├── tests/                  # تست‌های واحد و یکپارچگی (node:test)
-│   ├── store.test.js       # لایه‌ی ذخیره‌سازی، مهاجرت رمزنگاری، هرس، تشخیص داده حساس
+│   ├── store.test.js       # لایه‌ی ذخیره‌سازی، مهاجرت رمزنگاری، هرس، import/export، تشخیص داده حساس
 │   ├── main.test.js        # پروسه‌ی اصلی الکترون (اثرانگشت کلیپ‌بورد، IPC، sandbox)
-│   ├── storage.test.js     # فروشگاه ماندگار (نوشتن اتمیک، blob، بازیابی از فایل خراب)
+│   ├── storage.test.js     # فروشگاه ماندگار (نوشتن اتمیک، مقاومت در برابر crash، blob، بازیابی از فایل خراب)
 │   ├── bridge.test.js      # یکپارچگی renderer ↔ فروشگاه پروسه‌ی اصلی
 │   ├── app.test.js         # سناریوهای کامل رابط کاربری
 │   └── contract.test.js    # بررسی ایستای قراردادها (idها، i18n، نبود MD5)
@@ -208,12 +208,18 @@ ClipBoard/
 
 **مهاجرت کامل و راستی‌آزمایی‌شده.** هنگام فعال‌سازی، *همه‌ی* کلیپ‌های موجود — هم متن و هم تصویر —
 رمزنگاری می‌شوند. هر کلیپ بلافاصله رمزگشایی و با مقدار اصلی مقایسه می‌شود؛ تنها در صورت موفقیتِ
-همه‌ی موارد، کلید رمزنگاری فعال می‌شود و blobهای plaintext پاک می‌گردند. اگر هر مرحله شکست بخورد،
-وضعیت قبلی بازگردانده می‌شود؛ یعنی فعال‌سازی رمزنگاری هرگز نه plaintext باقی می‌گذارد و نه داده‌ای را از بین می‌برد.
+همه‌ی موارد، کلید رمزنگاری فعال می‌شود و blobهای plaintext پاک می‌گردند. اگر هر مرحله شکست بخورد —
+از جمله وقتی یک blob تصویری دیگر قابل خواندن نباشد — وضعیت قبلی بازگردانده می‌شود و رمزنگاری **روشن
+نمی‌شود**؛ یعنی فعال‌سازی رمزنگاری هرگز نه plaintext باقی می‌گذارد و نه داده‌ای را از بین می‌برد.
+
+**تعویض تصویر.** اگر تصویری در حالت رمزنگاری‌شده تعویض/جایگزین شود، نسخه‌ی جدید فقط به‌صورت
+ciphertext ذخیره و blob نسخه‌ی قبلی (که plaintext است) بلافاصله پس از موفقیت‌آمیز بودن نوشتن، حذف
+می‌شود — هیچ نسخه‌ی قدیمی تصویر روی دیسک باقی نمی‌ماند.
 
 **مدل حافظه.** فضای ذخیره‌سازی همیشه ciphertext است. متن رمزگشایی‌شده فقط تا زمانی که جلسه باز است
 در حافظه‌ی renderer نگه داشته می‌شود و با «قفل کردن فوری» (کلید `Ctrl+Shift+L` یا دکمه‌ی 🔒) و همچنین
-به‌صورت خودکار هنگام پنهان‌شدن پنجره (گزینه‌ی «قفل خودکار») کاملاً پاک می‌شود.
+به‌صورت خودکار هنگام پنهان‌شدن پنجره (گزینه‌ی «قفل خودکار») از حافظه‌ی برنامه حذف می‌شود. (JavaScript
+نمی‌تواند پاک‌شدن فیزیکی از RAM را تضمین کند؛ برنامه ارجاع‌ها و کلیدهای رمز را رها می‌کند، نه بیشتر.)
 
 **کارایی.** همه‌ی کلیپ‌های یک رمز عبور از یک salt مشترک استفاده می‌کنند (هر کلیپ IV تصادفی خودش را دارد)،
 بنابراین بازکردن قفل N کلیپ فقط یک‌بار PBKDF2 اجرا می‌کند، نه N بار.
@@ -227,17 +233,22 @@ ClipBoard/
 
 | لایه | محل | توضیح |
 |---|---|---|
-| متن کلیپ‌ها | فروشگاه پروسه‌ی اصلی | SQLite (در صورت وجود `better-sqlite3`) و در غیر این صورت فایل JSON با نوشتن **اتمیک** در `userData` |
+| متن کلیپ‌ها | فروشگاه پروسه‌ی اصلی | فایل JSON با نوشتن **اتمیک و همزمان** در `userData` (پیش‌فرض انتشار) یا SQLite |
 | تصاویر کامل | blob روی دیسک | به‌صورت باینری، با ارجاع `imageId` — نه base64 داخل JSON |
 | بندانگشتی‌ها | blob جداگانه | فهرست بدون base64 رندر می‌شود و بندانگشتی‌ها غیرهم‌زمان پر می‌شوند |
 | اندروید / مرورگر | `localStorage` | همان API، با blobهای جدا برای تصاویر |
 
+**تصمیم backend (انتشار).** نسخه‌ی رسمی ویندوز به‌صورت پیش‌فرض از backend فایل JSON استفاده می‌کند
+تا به ماژول بومی وابسته نباشد؛ SQLite (در صورت نصب/bundle شدن `better-sqlite3`) یک گزینه‌ی
+عملکردی است، نه نیاز پایداری. برای جلوگیری از پنجره‌ی ازدست‌رفتگی هنگام crash، هر تغییر در backend
+فایل **همزمان** و اتمیک (فایل موقت + rename + fsync) روی دیسک نوشته می‌شود — همان رفتاری که SQLite
+هم دارد — پس یک نوشته‌ی تأییدشده بلافاصله بعد از crash نیز سر جایش است.
+
 اگر نوشتن به دلیل پر بودن فضا شکست بخورد، قدیمی‌ترین کلیپ‌های **سنجاق‌نشده** هرس می‌شوند و
 عملیات نوشتن تکرار می‌شود؛ نتیجه‌ی همان تلاش دوم به فراخوان برگردانده می‌شود.
 
-> **SQLite اختیاری است.** به‌صورت پیش‌فرض از backend فایل JSON استفاده می‌شود تا ساخت ویندوز
-> به ماژول بومی نیاز نداشته باشد. برای فعال‌سازی SQLite کافی است `better-sqlite3` نصب شود؛
-> کد به‌صورت خودکار آن را تشخیص داده و در صورت نبود، بی‌صدا به فایل JSON بازمی‌گردد.
+> **حذف blob در تعویض/حذف کلیپ** فقط *پس از* موفقیت‌آمیز بودن نوشتن روی دیسک انجام می‌شود؛
+> اگر نوشتن شکست بخورد، هیچ بایتی که تاریخچه‌ی روی دیسک هنوز به آن ارجاع می‌دهد حذف نمی‌شود.
 
 ---
 
@@ -360,9 +371,13 @@ npm run build:android  # Android APK → android/app/build/outputs/apk/release/
 - **Windows**: Electron 22 (Chromium 108 — the last line compatible with Windows 7) + electron-builder/NSIS
 - **Android**: Capacitor 6 (minSdk 24) + a native Java clipboard plugin (foreground service + accessibility service)
 - **Shared UI**: vanilla HTML/CSS/JS — no framework, no CDN dependencies, fully offline
-- **Persistence**: main-process store (SQLite when `better-sqlite3` is present, otherwise an
-  atomically-written JSON file in `userData`), with images kept as binary blobs referenced by id
-  instead of base64 inside the clips document. `localStorage` remains the backend on Android/web.
+- **Persistence**: main-process store with an atomically-written JSON file in `userData` as the
+  release default (Windows builds must not depend on a native module), and SQLite as an optional
+  performance backend when `better-sqlite3` is bundled. The JSON backend writes every acknowledged
+  mutation to disk synchronously and atomically (temp file + rename + fsync) — the same durability
+  SQLite gives, with no debounce window a crash could fall into. Images are kept as binary blobs
+  referenced by id instead of base64 inside the clips document; `localStorage` remains the backend
+  on Android/web.
 - **Tests**: `node:test` + jsdom — `npm test`
 
 ## 🔒 Security model
@@ -371,9 +386,14 @@ npm run build:android  # Android APK → android/app/build/outputs/apk/release/
   to the renderer, so both sides agree on what "the same clipboard" means.
 - **Encryption at rest** is AES-GCM 256 / PBKDF2-SHA256 (150k iterations). Enabling it migrates the
   whole history (text *and* images), verifies every round-trip, and only then flips the switch —
-  any failure rolls the previous state back.
-- **Decrypted text lives in renderer memory only while unlocked**, and is dropped on manual lock
-  (`Ctrl+Shift+L`) and automatically when the window is hidden.
+  any failure rolls the previous state back. If an image blob can no longer be read, enabling is
+  refused outright rather than silently leaving that image in plaintext.
+- **Replacing an image stores the new bytes as ciphertext and deletes the old plaintext blob** after
+  the write is durable; blob cleanup for edits/deletes/imports never runs before the new document is
+  safely on disk.
+- **Decrypted content lives in renderer memory only while unlocked**, and is dropped from the app on
+  manual lock (`Ctrl+Shift+L`) and automatically when the window is hidden. JS references and the
+  key cache are released; JavaScript cannot guarantee physical erasure from RAM.
 - **Sensitive-data detection is a heuristic warning, not a protection.** It covers GitHub/Slack/
   Google/Stripe/Twilio/npm/JWT/PEM/AWS formats, credentials in URLs, connection strings and
   high-entropy blobs, but it cannot promise to find every secret — the UI says so explicitly.

@@ -85,6 +85,62 @@ test('a corrupt store file does not brick startup', () => {
   );
 });
 
+test('acknowledged kv writes survive a crash without an explicit flush', () => {
+  // The JSON backend used to debounce writes by ~25 ms; a process crash inside
+  // that window could lose the last write. Writes are now synchronous and
+  // atomic, so an acknowledged set must already be on disk.
+  const dir = tmpDir();
+  const a = createStore(dir, { prefer: 'file' });
+  a.set('novaclip.clips', '[{"id":"c1"}]');
+  a.set('novaclip.settings', '{"lang":"fa"}');
+  // No flush()/close(): simulate the process dying right after the writes.
+
+  const b = createStore(dir, { prefer: 'file' });   // "next boot"
+  assert.strictEqual(b.get('novaclip.clips'), '[{"id":"c1"}]');
+  assert.strictEqual(b.get('novaclip.settings'), '{"lang":"fa"}');
+  assert.strictEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')).length, 0,
+    'no half-written temp files may remain');
+});
+
+test('a deleted key survives a crash without an explicit flush', () => {
+  const dir = tmpDir();
+  const a = createStore(dir, { prefer: 'file' });
+  a.set('k', 'value');
+  a.del('k');
+
+  const b = createStore(dir, { prefer: 'file' });
+  assert.strictEqual(b.get('k'), null);
+  assert.deepStrictEqual(Object.keys(b.getAll()), []);
+});
+
+test('blob writes are durable immediately (no flush needed)', () => {
+  const dir = tmpDir();
+  const store = createStore(dir, { prefer: 'file' });
+  const payload = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x01]);
+
+  store.putBlob('img1', dataUrl(payload));          // no flush
+
+  const reopened = createStore(dir, { prefer: 'file' });
+  assert.strictEqual(reopened.getBlob('img1'), dataUrl(payload));
+  assert.ok(fs.readFileSync(path.join(dir, 'blobs', 'img1')).equals(payload));
+});
+
+test('stale temp files left by a crashed write are cleaned up on open', () => {
+  const dir = tmpDir();
+  fs.writeFileSync(path.join(dir, 'store.json'), JSON.stringify({ version: 2, kv: { keep: 'me' } }));
+  // A crash between writing the temp file and renaming it leaves garbage like
+  // this; the document itself is never torn thanks to the atomic rename.
+  fs.writeFileSync(path.join(dir, 'store.json.1234.99999999.tmp'), '{"half":');
+
+  const store = createStore(dir, { prefer: 'file' });
+  assert.strictEqual(store.get('keep'), 'me');
+  store.set('b', '"2"');
+  store.flush();
+
+  assert.strictEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.tmp')).length, 0,
+    'stale temp files must be removed');
+});
+
 test('blobs round-trip as binary with their mime type', () => {
   const dir = tmpDir();
   const store = createStore(dir, { prefer: 'file' });
