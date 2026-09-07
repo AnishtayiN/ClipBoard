@@ -31,6 +31,14 @@ function createWindow(html) {
   Object.defineProperty(window, 'crypto', { value: webcrypto, configurable: true, writable: true });
   window.TextEncoder = TextEncoder;
   window.TextDecoder = TextDecoder;
+  // Node 20's WebCrypto validates BufferSource arguments with realm-sensitive
+  // checks.  Values created by jsdom's Uint8Array belong to the jsdom realm,
+  // while the injected WebCrypto implementation belongs to Node's realm, so
+  // decrypt() rejects otherwise valid ciphertext.  Real browsers keep these
+  // objects in one realm; make the test harness match that setup.  (Node 22 is
+  // more permissive, which is why this only failed in the Node 20 CI job.)
+  Object.defineProperty(window, 'ArrayBuffer', { value: ArrayBuffer, configurable: true, writable: true });
+  Object.defineProperty(window, 'Uint8Array', { value: Uint8Array, configurable: true, writable: true });
   window.matchMedia = window.matchMedia || (() => ({ matches: false, addListener() {}, removeListener() {} }));
   window.Notification = window.Notification || function () {};
 
